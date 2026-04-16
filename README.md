@@ -1,47 +1,49 @@
 # ChromePilot
 
-**AI Agent 的 Chrome 驾驶舱。**
+[中文文档](./README_CN.md)
 
-ChromePilot 让 AI Agent 能够在你**真实的 Chrome 浏览器**中执行 JavaScript、捕获网络流量、拦截 API 调用、管理 Cookie、截图——全程使用你已有的登录态。不需要傀儡浏览器，不需要 Token 搬运，不需要配置 CDP。装一个轻量 Chrome 扩展就能用。
+**An AI Agent's cockpit for real Chrome.**
+
+ChromePilot lets AI Agents execute JavaScript, capture network traffic, intercept API calls, manage cookies, and take screenshots — all inside your **real Chrome browser** using your existing login sessions. No puppet browsers, no token juggling, no CDP flags. Just install a lightweight Chrome extension and go.
 
 ```
-AI Agent ──HTTP──▸ ChromePilot Server ──WebSocket──▸ Chrome 扩展 ──▸ 你的浏览器
+AI Agent ──HTTP──▸ ChromePilot Server ──WebSocket──▸ Chrome Extension ──▸ Your Browser
                                                           │
-                                                     MAIN world 执行
-                                                 （你的 Cookie，你的会话）
+                                                     MAIN world execution
+                                                 (your cookies, your sessions)
 ```
 
-## 为什么选 ChromePilot？
+## Why ChromePilot?
 
-所有现有的浏览器自动化工具都面临同一个根本问题：**它们用不了你的登录态。**
+Every existing browser automation tool faces the same fundamental problem: **they can't use your login sessions.**
 
 | | ChromePilot | browser-use | Playwright / Puppeteer |
 |---|---|---|---|
-| 使用你真实的 Chrome | 是（扩展） | 需要 `--remote-debugging-port` | 启动独立浏览器 |
-| 继承登录会话 | 自动 | 需要配置 Chrome Profile | 不支持 |
-| `fetch()` 自动带 Cookie | 是（MAIN world） | 否（隔离上下文） | 否 |
-| 网络捕获 | 是（扩展内 CDP） | 否 | 是 |
-| 请求拦截 & Mock | 是 | 否 | 是 |
-| Console 捕获 | 是 | 否 | 是 |
-| Cookie 管理 | 是（chrome.cookies API） | 通过 CLI | 通过 CDP |
-| 配置复杂度 | 安装扩展 | 安装二进制 + 配置 | 安装浏览器 + 驱动 |
-| 依赖 | Python + aiohttp | Rust 二进制 | Node.js + 浏览器二进制 |
-| 单次命令延迟 | ~15ms | ~50ms | ~30ms |
+| Uses your real Chrome | Yes (extension) | Requires `--remote-debugging-port` | Launches separate browser |
+| Inherits login sessions | Automatic | Needs Chrome Profile config | Not supported |
+| `fetch()` sends cookies | Yes (MAIN world) | No (isolated context) | No |
+| Network capture | Yes (in-extension CDP) | No | Yes |
+| Request interception & mock | Yes | No | Yes |
+| Console capture | Yes | No | Yes |
+| Cookie management | Yes (chrome.cookies API) | Via CLI | Via CDP |
+| Setup complexity | Install extension | Install binary + config | Install browser + driver |
+| Dependencies | Python + aiohttp | Rust binary | Node.js + browser binary |
+| Single command latency | ~15ms | ~50ms | ~30ms |
 
-关键差异在架构层面。CDP 类工具将脚本注入到**隔离的世界（isolated world）**中——你的 `fetch("/api/data")` 不会携带页面的认证 Cookie。ChromePilot 的扩展通过 `chrome.scripting.executeScript` 在 **MAIN world** 中执行代码，你的 JavaScript 就像在浏览器控制台中手动输入一样运行。每一个 `fetch` 调用、每一个 `XMLHttpRequest`、每一次 `document.cookie` 访问，行为都与真实页面完全一致。
+The key difference is architectural. CDP-based tools inject scripts into an **isolated world** — your `fetch("/api/data")` won't carry the page's authentication cookies. ChromePilot's extension uses `chrome.scripting.executeScript` to run code in the **MAIN world**, so your JavaScript behaves exactly as if you typed it in the browser console. Every `fetch` call, every `XMLHttpRequest`, every `document.cookie` access works identically to the real page.
 
-这一点至关重要，因为最有价值的浏览器自动化场景恰恰涉及**需要认证的内部工具**——数据看板、管理后台、项目管理系统、监控平台——这些系统的认证流程要么复杂（SSO、MFA、证书认证），要么根本无法用程序模拟。使用 ChromePilot，只要你在 Chrome 里能看到的，Agent 就能操作。
+This matters because the most valuable browser automation scenarios involve **authenticated internal tools** — dashboards, admin panels, project management systems, monitoring platforms — where authentication flows are either complex (SSO, MFA, certificate auth) or simply impossible to replicate programmatically. With ChromePilot, if you can see it in Chrome, your Agent can operate on it.
 
-## 快速开始
+## Quick Start
 
-### 1. 安装 Chrome 扩展
+### 1. Install the Chrome Extension
 
-1. 打开 `chrome://extensions/`
-2. 开启右上角的**开发者模式**
-3. 点击**加载已解压的扩展程序** → 选择 `extension/` 目录
-4. 看到 "ChromePilot" 出现并显示绿色状态即可
+1. Open `chrome://extensions/`
+2. Enable **Developer mode** (top right)
+3. Click **Load unpacked** → select the `extension/` directory
+4. You should see "ChromePilot" appear with a green status
 
-### 2. 启动服务
+### 2. Start the Server
 
 ```bash
 pip install aiohttp
@@ -55,7 +57,7 @@ python3 server.py
 [chromepilot] ✓ Extension connected
 ```
 
-### 3. 开始使用
+### 3. Start Using It
 
 ```bash
 python3 cp.py status
@@ -66,60 +68,60 @@ python3 cp.py status
 python3 cp.py tabs
 #   * [887966267] Google - Chrome
 #           https://www.google.com
-#     [887967344] 内部看板 - Dashboard
+#     [887967344] Internal Dashboard
 #           https://internal.company.com/dashboard
 
 python3 cp.py eval 'document.title'
 # Google
 ```
 
-就这些。不需要配置文件，不需要环境变量，不需要下载浏览器二进制。
+That's it. No config files, no environment variables, no browser binary downloads.
 
-## 实战示例
+## Real-World Examples
 
-### 从已登录的内部系统中提取数据
+### Extract Data from Authenticated Internal Systems
 
-Agent 需要从内部项目看板拉取数据，用户已经通过 SSO 登录。
+Your Agent needs to pull data from an internal project dashboard. The user is already logged in via SSO.
 
 ```bash
-# 找到目标标签页
+# Find the target tab
 cp tabs
-#     [42001] 项目看板 - Acme Corp
+#     [42001] Project Dashboard - Acme Corp
 #           https://dashboard.internal.com/projects
 
-# 执行 fetch，Cookie 自动携带——无需任何额外配置
+# fetch() carries cookies automatically — zero extra config
 cp eval 'fetch("/api/v1/projects?status=active").then(r => r.json()).then(d => JSON.stringify(d))' --url dashboard
-# [{"id":1,"name":"项目Alpha","status":"active","owner":"alice"}, ...]
+# [{"id":1,"name":"Project Alpha","status":"active","owner":"alice"}, ...]
 ```
 
-使用任何 CDP 类工具，这个 `fetch` 都会返回 401，因为请求不会携带会话 Cookie。而 ChromePilot 直接就能用。
+With any CDP-based tool, this `fetch` would return 401 because the request wouldn't carry session cookies. ChromePilot just works.
 
-### 逆向分析陌生 Web 应用的 API
+### Reverse-Engineer an Unfamiliar Web App's API
 
-你打开了一个新的内部工具，需要搞清楚它调用了哪些 API。与其去读压缩混淆的源码，不如直接观察网络流量：
+You've opened a new internal tool and need to figure out which APIs it calls. Instead of reading minified source code, just observe network traffic:
 
 ```bash
-# 在目标标签页上开始捕获
+# Start capturing on the target tab
 cp net start --url dashboard
 
-# 触发一些用户操作
+# Trigger some user actions
 cp eval 'document.querySelector(".refresh-btn").click()' --url dashboard
 
-# 查看调用了哪些 API
+# See what APIs were called
 cp net requests --type Fetch --completed -v
 #   ← POST 200 https://dashboard.internal.com/graphql [2.3KB] application/json
 #     requestId: 1001.42
 #   ← GET 200 https://dashboard.internal.com/api/metrics?range=7d [890B] application/json
 #     requestId: 1001.43
 
-# 查看 GraphQL 请求的 body
+# Inspect the GraphQL request body
 cp net body 1001.42
 # {
 #   "query": "query GetProjects($status: String!) { projects(status: $status) { id name owner } }",
 #   "variables": {"status": "active"}
 # }
 
-# 现在你知道了完整的 API 契约——直接复用
+# Now you know the full API contract — reuse it directly
 cp eval 'fetch("/graphql", {
   method: "POST",
   headers: {"Content-Type": "application/json"},
@@ -130,58 +132,58 @@ cp eval 'fetch("/graphql", {
 }).then(r => r.json()).then(d => JSON.stringify(d))' --url dashboard
 ```
 
-Agent 纯粹通过观察网络流量就发现了 API 的结构——完全不需要文档。
+The Agent discovered the API structure purely by observing network traffic — no documentation needed.
 
-### Mock API 响应来测试边界场景
+### Mock API Responses to Test Edge Cases
 
-你想看页面如何处理错误状态，但真实 API 总是返回成功：
+You want to see how a page handles error states, but the real API always returns success:
 
 ```bash
-# 设置拦截规则：mock 定价 API 返回错误
+# Set up interception: mock the pricing API to return an error
 cp net intercept '[{
   "urlPattern": "api/pricing",
   "response": {
     "status": 500,
     "headers": {"content-type": "application/json"},
-    "body": "{\"error\": \"服务暂时不可用\"}"
+    "body": "{\"error\": \"Service temporarily unavailable\"}"
   }
 }]' --url myapp
 
-# 刷新页面——它会命中我们的 mock 而非真实 API
+# Reload — the page hits our mock instead of the real API
 cp tab reload --url myapp
 
-# 检查应用是否正确展示了错误状态
+# Check if the app displays the error state correctly
 cp screenshot error-state.png --url myapp
 
-# 查看控制台是否有未捕获的错误
+# Check console for uncaught errors
 cp console start --url myapp
 cp eval 'document.querySelector(".retry-btn").click()' --url myapp
 cp console messages --level error
 #   ✗ Uncaught TypeError: Cannot read properties of undefined (reading 'price')
 #       at PricingWidget.render (pricing.js:42)
 
-# 清理
+# Clean up
 cp net intercept-stop --url myapp
 ```
 
-你刚刚发现了一个 Bug——应用没有优雅地处理 API 错误。而且你完全没碰后端代码。
+You just found a bug — the app doesn't gracefully handle API errors. And you never touched the backend code.
 
-### 监控长时间运行的流程
+### Monitor Long-Running Processes
 
-你正在 Web 界面上看一个部署流水线，希望状态变化时能及时知道：
+You're watching a deployment pipeline in a web UI and want to know when the status changes:
 
 ```bash
-# 启动 console + 网络捕获
+# Start console + network capture
 cp console start --url pipeline
 cp net start --url pipeline
 
-# 轮询状态变化
+# Poll for status changes
 while true; do
   status=$(cp eval 'document.querySelector(".pipeline-status")?.textContent' --url pipeline)
-  echo "[$(date +%H:%M:%S)] 状态: $status"
+  echo "[$(date +%H:%M:%S)] Status: $status"
   
   if [ "$status" = "Success" ] || [ "$status" = "Failed" ]; then
-    # 捕获最终状态
+    # Capture final state
     cp screenshot "pipeline-$(date +%Y%m%d-%H%M%S).png" --url pipeline
     cp console messages --level error -n 5
     cp net requests --filter "api/deploy" --completed
@@ -191,140 +193,140 @@ while true; do
 done
 ```
 
-### 管理浏览器状态用于测试
+### Manage Browser State for Testing
 
 ```bash
-# 查看当前有哪些 Cookie
+# See current cookies
 cp cookie list --domain .myapp.com
 #   🔒H .myapp.com    session_token    eyJhbGciOiJIUz...
 #   🔒  .myapp.com    theme            dark
 #      .myapp.com    onboarding       completed
 
-# 修改 Cookie 来测试不同的用户状态
+# Modify cookies to test different user states
 cp cookie set --url https://myapp.com --name onboarding --value pending
 
-# 查看 localStorage
+# Inspect localStorage
 cp storage list --url myapp
-#   localStorage: 12 个键
+#   localStorage: 12 keys
 #     user_preferences
 #     feature_flags
 #     cache_v2
 
-# 读取特定值
+# Read a specific value
 cp storage get feature_flags --url myapp
 # {"dark_mode": true, "beta_features": false, "new_editor": true}
 
-# 切换功能开关
+# Toggle feature flags
 cp storage set feature_flags '{"dark_mode":true,"beta_features":true,"new_editor":true}' --url myapp
 
-# 刷新并验证
+# Reload and verify
 cp tab reload --url myapp
 cp screenshot feature-flags-test.png --url myapp
 ```
 
-### 获取页面性能指标
+### Get Page Performance Metrics
 
 ```bash
 cp page --url myapp
-#   URL:            https://myapp.com/dashboard
-#   标题:           Dashboard - MyApp
-#   就绪状态:       complete
-#   内容类型:       text/html
-#   Cookie 数量:    15
-#   localStorage:   12 个键
-#   sessionStorage: 3 个键
+#   URL:             https://myapp.com/dashboard
+#   Title:           Dashboard - MyApp
+#   Ready state:     complete
+#   Content type:    text/html
+#   Cookies:         15
+#   localStorage:    12 keys
+#   sessionStorage:  3 keys
 #   DOMContentLoaded: 847ms
-#   Load:           1203ms
+#   Load:            1203ms
 ```
 
-## 命令参考
+## Command Reference
 
-### 全局选项
-
-```
---port PORT     服务端口（默认: 8787）
---json          输出原始 JSON，便于程序化处理
-```
-
-标签页定位（大多数命令都支持）：
+### Global Options
 
 ```
---tab ID        通过 Chrome 标签页 ID 指定
---url MATCH     通过 URL 子串匹配目标标签页
-（省略）         使用当前活跃标签页
+--port PORT     Server port (default: 8787)
+--json          Output raw JSON for programmatic use
 ```
 
-### 命令一览
+Tab targeting (supported by most commands):
+
+```
+--tab ID        Target by Chrome tab ID
+--url MATCH     Target by URL substring match
+(omitted)       Uses the currently active tab
+```
+
+### Commands
 
 ```bash
-# 连接
-cp status                                    # 检查服务器 + 扩展状态
+# Connection
+cp status                                    # Check server + extension status
 
-# 标签页
-cp tabs                                      # 列出所有标签页及 ID
-cp tab create [URL]                          # 打开新标签页
-cp tab close TAB_ID                          # 关闭标签页
-cp tab reload [--tab ID] [--no-cache]        # 刷新标签页
-cp tab activate TAB_ID                       # 激活标签页（切到前台）
+# Tabs
+cp tabs                                      # List all tabs with IDs
+cp tab create [URL]                          # Open new tab
+cp tab close TAB_ID                          # Close tab
+cp tab reload [--tab ID] [--no-cache]        # Reload tab
+cp tab activate TAB_ID                       # Bring tab to foreground
 
-# JavaScript 执行
-cp eval 'expression'                         # 在 MAIN world（页面上下文）中执行 JS
-cp eval -f script.js [--url match]           # 执行 JS 文件
-cp eval 'expr' --isolated                    # 在 ISOLATED world 中执行
+# JavaScript Execution
+cp eval 'expression'                         # Execute JS in MAIN world (page context)
+cp eval -f script.js [--url match]           # Execute JS file
+cp eval 'expr' --isolated                    # Execute in ISOLATED world
 
-# 导航
-cp navigate URL [--tab ID] [--wait]          # 导航到 URL（--wait 等待加载完成）
+# Navigation
+cp navigate URL [--tab ID] [--wait]          # Navigate to URL (--wait for load)
 
-# 网络捕获
-cp net start [--tab ID]                      # 开始捕获
-cp net requests [--filter PAT] [--method M]  # 查看捕获的请求
-cp net requests --type Fetch --completed -v  # 过滤 + 显示请求 ID
-cp net body REQUEST_ID [-o file.json]        # 获取响应体
-cp net clear                                 # 清空缓冲区
-cp net stop                                  # 停止捕获
+# Network Capture
+cp net start [--tab ID]                      # Start capturing
+cp net requests [--filter PAT] [--method M]  # View captured requests
+cp net requests --type Fetch --completed -v  # Filter + show request IDs
+cp net body REQUEST_ID [-o file.json]        # Get response body
+cp net clear                                 # Clear buffer
+cp net stop                                  # Stop capturing
 
-# 网络拦截
-cp net intercept 'RULES_JSON' [--tab ID]     # 设置 Mock 规则
-cp net intercept-stop                        # 移除所有规则
+# Network Interception
+cp net intercept 'RULES_JSON' [--tab ID]     # Set mock rules
+cp net intercept-stop                        # Remove all rules
 
-# Console 捕获
-cp console start [--tab ID]                  # 开始捕获
-cp console messages [--level error] [-n 20]  # 查看消息
-cp console clear                             # 清空缓冲区
-cp console stop                              # 停止捕获
+# Console Capture
+cp console start [--tab ID]                  # Start capturing
+cp console messages [--level error] [-n 20]  # View messages
+cp console clear                             # Clear buffer
+cp console stop                              # Stop capturing
 
-# Cookie
-cp cookie list [--domain D] [--url U]        # 列出 Cookie
-cp cookie set --url U --name N --value V     # 设置 Cookie
-cp cookie delete --url U --name N            # 删除 Cookie
+# Cookies
+cp cookie list [--domain D] [--url U]        # List cookies
+cp cookie set --url U --name N --value V     # Set cookie
+cp cookie delete --url U --name N            # Delete cookie
 
-# 截图
-cp screenshot [output.png] [--format jpeg]   # 截取可见区域
+# Screenshot
+cp screenshot [output.png] [--format jpeg]   # Capture visible area
 
-# 页面信息
-cp page [--tab ID]                           # URL、标题、加载时间、存储统计
+# Page Info
+cp page [--tab ID]                           # URL, title, load times, storage stats
 
-# 存储
-cp storage list [--session]                  # 列出 localStorage/sessionStorage 键
-cp storage get KEY                           # 获取值（JSON 自动格式化）
-cp storage set KEY VALUE                     # 设置值
+# Storage
+cp storage list [--session]                  # List localStorage/sessionStorage keys
+cp storage get KEY                           # Get value (JSON auto-formatted)
+cp storage set KEY VALUE                     # Set value
 ```
 
-## 架构
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    你的 Chrome 浏览器                     │
+│                    Your Chrome Browser                   │
 │                                                         │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐                │
-│  │  标签 1  │  │  标签 2  │  │  标签 3  │   ...         │
-│  │ (已通过  │  │ (已通过  │  │ (任意   │               │
-│  │  SSO    │  │  OAuth  │  │  页面)   │               │
-│  │  登录)   │  │  登录)   │  │          │               │
+│  │  Tab 1   │  │  Tab 2   │  │  Tab 3   │   ...         │
+│  │ (logged  │  │ (logged  │  │ (any    │               │
+│  │  in via  │  │  in via  │  │  page)   │               │
+│  │  SSO)    │  │  OAuth)  │  │          │               │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘              │
 │       │              │              │                    │
 │  ┌────┴──────────────┴──────────────┴────────────────┐  │
-│  │            ChromePilot 扩展 (MV3)                  │  │
+│  │           ChromePilot Extension (MV3)              │  │
 │  │                                                    │  │
 │  │  chrome.scripting.executeScript (MAIN world)       │  │
 │  │  chrome.debugger (Network/Fetch/Runtime)           │  │
@@ -339,93 +341,93 @@ cp storage set KEY VALUE                     # 设置值
               │   (Python/aiohttp)    │
               │                       │
               │   HTTP REST API       │
-              │   WebSocket 中继      │
-              │   SSE 事件流          │
+              │   WebSocket relay     │
+              │   SSE event stream    │
               └───────────┬───────────┘
                           │ HTTP
               ┌───────────┴───────────┐
               │   CLI (cp.py)         │
-              │   或任意 HTTP 客户端   │
-              │   或你的 AI Agent      │
+              │   or any HTTP client  │
+              │   or your AI Agent    │
               └───────────────────────┘
 ```
 
-**为什么选择这种架构？**
+**Why this architecture?**
 
-Chrome 扩展方案解决了 CDP 无法解决的问题：
+The Chrome extension approach solves what CDP cannot:
 
-1. **MAIN world 执行** — `chrome.scripting.executeScript({world: "MAIN"})` 让你的代码运行在页面自身的 JavaScript 上下文中。变量、Cookie、fetch 拦截器——一切都与页面共享。CDP 的 `Runtime.evaluate` 默认运行在隔离上下文中。
+1. **MAIN world execution** — `chrome.scripting.executeScript({world: "MAIN"})` runs your code in the page's own JavaScript context. Variables, cookies, fetch interceptors — everything is shared with the page. CDP's `Runtime.evaluate` runs in an isolated context by default.
 
-2. **零配置认证** — 扩展天然继承用户已有的登录态。SSO、OAuth、证书认证、MFA——只要用户已经登录，Agent 就已经登录。不需要重放认证流程。
+2. **Zero-config authentication** — The extension naturally inherits the user's existing login sessions. SSO, OAuth, certificate auth, MFA — if the user is logged in, the Agent is logged in. No need to replay authentication flows.
 
-3. **不需要重启浏览器** — CDP 需要 Chrome 以 `--remote-debugging-port` 参数启动。ChromePilot 可以在任何正在运行的 Chrome 实例上工作——安装扩展即可。
+3. **No browser restart required** — CDP requires Chrome to be launched with `--remote-debugging-port`. ChromePilot works on any running Chrome instance — just install the extension.
 
-4. **Debugger API 访问** — 扩展可以使用 `chrome.debugger` 对单个标签页挂载 DevTools 协议，实现网络捕获和请求拦截，无需 Chrome 级别的 CDP 访问。
+4. **Debugger API access** — The extension can use `chrome.debugger` to attach DevTools Protocol to individual tabs, enabling network capture and request interception without Chrome-level CDP access.
 
-## 集成方式
+## Integration
 
-### 作为 Agent Skill
+### As an Agent Skill
 
-ChromePilot 附带 Agent Skill 定义文件，教 AI Agent 如何使用每个命令。
+ChromePilot ships with an Agent Skill definition file that teaches AI Agents how to use each command.
 
-兼容：**QoderWork** / **Cursor** / **Claude Code** / **Qoder** / **Codex**
+Compatible with: **QoderWork** / **Cursor** / **Claude Code** / **Qoder** / **Codex**
 
-### 作为 HTTP API
+### As an HTTP API
 
-服务暴露简洁的 REST API，任何 HTTP 客户端都能调用：
+The server exposes a clean REST API that any HTTP client can call:
 
 ```bash
-# 列出标签页
+# List tabs
 curl http://localhost:8787/tabs
 
-# 执行 JS
+# Execute JS
 curl -X POST http://localhost:8787/evaluate \
   -H "Content-Type: application/json" \
   -d '{"expression": "document.title", "urlMatch": "myapp"}'
 
-# 开始网络捕获
+# Start network capture
 curl -X POST http://localhost:8787/network/start \
   -d '{"urlMatch": "myapp"}'
 
-# 获取捕获的请求
+# Get captured requests
 curl "http://localhost:8787/network/requests?tabId=42001&urlPattern=api&completed=true"
 
-# 实时事件流 (SSE)
+# Real-time event stream (SSE)
 curl http://localhost:8787/events?types=net,console
 ```
 
-### 实时事件流
+### Real-Time Event Stream
 
-`/events` 端点提供 Server-Sent Events，用于实时监控：
+The `/events` endpoint provides Server-Sent Events for real-time monitoring:
 
 ```bash
 curl -N http://localhost:8787/events?types=net.request,console
 
 data: {"type":"net.request","tabId":42001,"data":{"url":"https://api.example.com/data","method":"GET","type":"Fetch"}}
-data: {"type":"console","tabId":42001,"data":{"level":"log","args":["收到 API 响应"]}}
+data: {"type":"console","tabId":42001,"data":{"level":"log","args":["API response received"]}}
 data: {"type":"net.response","tabId":42001,"data":{"url":"https://api.example.com/data","status":200,"mimeType":"application/json"}}
 ```
 
-## 环境要求
+## Requirements
 
-- **Chrome**（任意较新版本）并加载 ChromePilot 扩展
-- **Python 3.8+** 及 `aiohttp`（`pip install aiohttp`）
-- 就这些。不需要下载 Chromium，不需要 Node.js，不需要 Selenium，不需要 WebDriver。
+- **Chrome** (any recent version) with the ChromePilot extension loaded
+- **Python 3.8+** with `aiohttp` (`pip install aiohttp`)
+- That's it. No Chromium download, no Node.js, no Selenium, no WebDriver.
 
-## 常见问题
+## FAQ
 
-**Q: 会出现"Chrome 正在被自动化测试软件控制"的横幅吗？**
-A: 不会。那个横幅是 CDP/DevTools 协议连接触发的。ChromePilot 使用标准 Chrome 扩展——没有自动化横幅，不会被反爬虫系统检测到。
+**Q: Will I see a "Chrome is being controlled by automated test software" banner?**
+A: No. That banner is triggered by CDP/DevTools protocol connections. ChromePilot uses a standard Chrome extension — no automation banner, no detection by anti-bot systems.
 
-**Q: 那 debugger 横幅呢？**
-A: 当你使用 `cp net start` 或 `cp console start` 时，Chrome 会在对应标签页上显示"已开始调试此浏览器"的提示栏。这是正常现象——说明 `chrome.debugger` API 已经挂载到该标签页用于网络/控制台捕获。执行 `cp net stop` / `cp console stop` 后会消失。
+**Q: What about the debugger banner?**
+A: When you use `cp net start` or `cp console start`, Chrome shows an "Started debugging this browser" info bar on the affected tab. This is expected — it means the `chrome.debugger` API has attached to that tab for network/console capture. It disappears when you run `cp net stop` / `cp console stop`.
 
-**Q: 可以配合无头 Chrome 使用吗？**
-A: ChromePilot 专为有界面的真实 Chrome 及其已有的用户会话设计。如果你需要无头自动化且不依赖登录态，请使用 Playwright 或 Puppeteer——它们更适合那个场景。
+**Q: Can I use it with headless Chrome?**
+A: ChromePilot is designed for headed Chrome with existing user sessions. If you need headless automation without login state, use Playwright or Puppeteer — they're better suited for that use case.
 
-**Q: 安全性如何？**
-A: 服务默认只监听 localhost。扩展只连接 `127.0.0.1:8787`。除非你的脚本主动发送，否则没有任何数据会离开你的机器。
+**Q: How about security?**
+A: The server listens on localhost only by default. The extension only connects to `127.0.0.1:8787`. No data leaves your machine unless your scripts explicitly send it out.
 
-## 许可证
+## License
 
 MIT
