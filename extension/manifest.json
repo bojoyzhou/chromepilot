@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "ChromePilot",
+  "version": "2.0.0",
+  "description": "AI agent pilot for real Chrome: JS execution, network capture, cookies, console, and more",
+  "permissions": [
+    "scripting",
+    "tabs",
+    "alarms",
+    "debugger",
+    "cookies"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {}
+}
