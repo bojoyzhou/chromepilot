@@ -280,6 +280,58 @@ cp proxy stop --url myapp
 
 与底层的 `cp net intercept`（仅支持 mock 响应）不同，proxy 系统提供 5 种动作、命中日志、热更新规则，且可与网络捕获同时运行互不干扰。
 
+### 全局代理模式
+
+全局代理会自动将规则应用到**所有浏览器标签页**——包括代理启动后新打开的标签页。无需指定 `--tab` 或 `--url`。规则在服务端/扩展重启后自动恢复。
+
+```bash
+# 通过 HTTP API 启动全局代理
+curl -X POST http://localhost:8787/proxy/start-global \
+  -H "Content-Type: application/json" \
+  -d '{"rules": [{"pattern": "tracking\\.js", "action": "block"}]}'
+
+# 停止全局代理
+curl -X POST http://localhost:8787/proxy/stop-global
+```
+
+也可以直接在 **Popup UI**（点击 ChromePilot 扩展图标）中管理全局代理，使用 Whistle 兼容的文本格式——无需编写 JSON。
+
+### Whistle 兼容规则格式
+
+Popup UI 支持 [Whistle](https://github.com/nicedoc/whistle) 文本格式来编辑规则，每行一条规则：
+
+```
+# CDN 重定向
+^s.alicdn.com/@g/*** http://dev.g.alicdn.com/$1
+
+# URL 重定向
+https://example.com https://staging.example.com
+
+# IP host 映射（将域名解析到指定 IP，保留 Host 头和 TLS SNI）
+140.205.215.168 api.example.com
+
+# 为匹配请求添加自定义请求头
+*.example.com reqHeaders://(X-Debug: true)
+*.internal.com reqHeaders://(EagleEye-UserData: dpath_env=12345)
+
+# 以 # 开头的行为注释，会被忽略
+```
+
+支持的格式：`^domain/*** target/$1`（正则重定向）、`https://src https://dst`（URL 重定向）、`IP domain`（IP host 映射）、`pattern reqHeaders://(Header: Value)`（请求头修改器）。请求头修改器可以与其他规则组合使用——它们作为叠加层应用到所有匹配的请求上。
+
+### IP Host 映射与正确的 TLS
+
+使用 `IP domain` 规则时，ChromePilot 通过服务端的自定义 DNS 解析器代理请求。这确保 TLS 握手使用正确的 SNI（Server Name Indication）——域名而非 IP——因此 HTTPS 连接能正常工作。原始 Host 头会被保留。
+
+### Popup UI
+
+点击 ChromePilot 扩展图标打开管理面板。Popup 提供：
+
+- **概览标签** — 连接状态、所有标签页的活跃功能、统计数据
+- **代理标签** — 启动/停止全局代理、以 Whistle 文本格式编辑规则、实时查看命中日志
+
+在 Popup 中编辑的规则会自动持久化并与服务端同步。
+
 ## 命令参考
 
 ### 全局选项

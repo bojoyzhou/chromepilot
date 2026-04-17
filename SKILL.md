@@ -173,6 +173,33 @@ Actions:
 
 Unmatched requests pass through normally. Proxy and `cp net start` can run simultaneously on the same tab.
 
+### Global Proxy Mode
+
+Global proxy applies rules to **all tabs** automatically, including newly opened ones. Rules persist across restarts.
+
+```bash
+# Start global proxy via HTTP API
+curl -X POST http://localhost:8787/proxy/start-global \
+  -H "Content-Type: application/json" \
+  -d '{"rules": [{"pattern": "tracking\\.js", "action": "block"}]}'
+
+# Stop global proxy
+curl -X POST http://localhost:8787/proxy/stop-global
+```
+
+### Whistle-Compatible Rule Format (Popup UI)
+
+The extension popup (click icon) accepts Whistle text format:
+
+```
+^cdn.example.com/@g/*** http://dev.cdn.com/$1       # Regex redirect with capture
+https://prod.example.com https://staging.example.com  # URL redirect
+140.205.215.168 api.example.com                       # IP host mapping (correct TLS SNI)
+*.example.com reqHeaders://(X-Debug: true)            # Add request headers
+```
+
+IP host mapping routes through the server with custom DNS resolver to preserve correct TLS SNI. Header modifiers (`reqHeaders://`) act as overlays — they combine with other matching rules.
+
 ## Global Options
 
 | Option | Description |

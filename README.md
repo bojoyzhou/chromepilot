@@ -280,6 +280,59 @@ cp proxy stop --url myapp
 
 Unlike the lower-level `cp net intercept` (which only supports mock responses), the proxy system offers five distinct actions, hit logging, hot-reload of rules, and works alongside network capture without interference.
 
+### Global Proxy Mode
+
+Global proxy automatically applies rules to **all browser tabs** — including new tabs opened after proxy start. No need to specify `--tab` or `--url`. Rules persist across server/extension restarts.
+
+```bash
+# Start global proxy via HTTP API
+curl -X POST http://localhost:8787/proxy/start-global \
+  -H "Content-Type: application/json" \
+  -d '{"rules": [{"pattern": "tracking\\.js", "action": "block"}]}'
+
+# Stop global proxy
+curl -X POST http://localhost:8787/proxy/stop-global
+```
+
+You can also manage global proxy directly from the **Popup UI** (click the ChromePilot extension icon) using Whistle-compatible text format — no JSON needed.
+
+### Whistle-Compatible Rule Format
+
+The Popup UI accepts rules in [Whistle](https://github.com/nicedoc/whistle) text format for easy editing. One rule per line:
+
+```
+# Redirect CDN
+^s.alicdn.com/@g/*** http://dev.g.alicdn.com/$1
+
+# URL redirect
+https://example.com https://staging.example.com
+
+# IP host mapping (resolves domain to specified IP, preserving Host header & TLS SNI)
+140.205.215.168 api.example.com
+
+# Add custom request headers to matching requests
+*.example.com reqHeaders://(X-Debug: true)
+*.internal.com reqHeaders://(EagleEye-UserData: dpath_env=12345)
+
+# Comments start with #
+# Commented-out rules are ignored
+```
+
+Supported formats: `^domain/*** target/$1` (regex redirect), `https://src https://dst` (URL redirect), `IP domain` (IP host mapping), `pattern reqHeaders://(Header: Value)` (request header modifier). Header modifiers can be combined with other rules — they act as overlays applied to all matching requests.
+
+### IP Host Mapping with Correct TLS
+
+When using `IP domain` rules, ChromePilot proxies the request through the server with a custom DNS resolver. This ensures the TLS handshake uses the correct SNI (Server Name Indication) — the domain name, not the IP — so HTTPS connections work properly. The original Host header is preserved.
+
+### Popup UI
+
+Click the ChromePilot extension icon to open the management panel. The popup provides:
+
+- **Overview tab** — connection status, active features across all tabs, statistics
+- **Proxy tab** — start/stop global proxy, edit rules in Whistle text format, view hit log in real-time
+
+Rules edited in the popup are automatically persisted and synced with the server.
+
 ## Command Reference
 
 ### Global Options
