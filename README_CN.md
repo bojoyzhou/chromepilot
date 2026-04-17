@@ -1,6 +1,12 @@
-# ChromePilot
+<p align="center">
+  <img src="./logo.png" width="128" alt="ChromePilot Logo">
+</p>
 
-[English](./README.md)
+<h1 align="center">ChromePilot</h1>
+
+<p align="center">
+  <a href="./README.md">English</a>
+</p>
 
 **AI Agent 的 Chrome 驾驶舱。**
 

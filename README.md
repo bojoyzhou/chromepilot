@@ -1,6 +1,12 @@
-# ChromePilot
+<p align="center">
+  <img src="./logo.png" width="128" alt="ChromePilot Logo">
+</p>
 
-[中文文档](./README_CN.md)
+<h1 align="center">ChromePilot</h1>
+
+<p align="center">
+  <a href="./README_CN.md">中文文档</a>
+</p>
 
 **An AI Agent's cockpit for real Chrome.**
 
