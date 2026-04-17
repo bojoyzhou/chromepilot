@@ -1,6 +1,6 @@
 ---
 name: chromepilot
-description: Pilots AI agents through the user's real Chrome browser via a lightweight extension. Runs JS in page context with full login session, captures network traffic, manages cookies, and intercepts requests. Use when the agent needs to interact with authenticated web pages, inspect API calls, explore web app behavior, or automate browser tasks that require the user's session.
+description: Pilots AI agents through the user's real Chrome browser via a lightweight extension. Runs JS in page context with full login session, captures network traffic, manages cookies, intercepts requests, and applies rich proxy rules (mock/block/redirect/delay/header). Use when the agent needs to interact with authenticated web pages, inspect API calls, explore web app behavior, or automate browser tasks that require the user's session.
 ---
 
 # ChromePilot — AI Agent's Chrome Pilot
@@ -144,6 +144,34 @@ cp storage get myKey                 # Get value (auto pretty-prints JSON)
 cp storage set myKey "value"         # Set value
 cp storage get token --session       # Get from sessionStorage
 ```
+
+### Proxy Rules (mock / block / redirect / delay / header)
+
+Rich request interception with 5 actions, hit logging, and hot-reload:
+
+```bash
+# Start proxy with rules
+cp proxy start '[{"pattern":"api/data","action":"mock","response":{"status":200,"body":"{\"ok\":true}"}}]' --url myapp
+cp proxy start -f rules.json --url myapp    # Load from file
+
+# View and manage
+cp proxy list --url myapp                   # Show active rules
+cp proxy log --url myapp                    # View hit log
+cp proxy update '[NEW_RULES]' --url myapp   # Hot-update rules
+cp proxy clear-log --url myapp              # Clear hit log
+cp proxy stop --url myapp                   # Stop proxy
+```
+
+Rule format: `[{"pattern": "regex", "action": "mock|block|redirect|delay|header", ...}]`
+
+Actions:
+- `mock` — return custom response: `{"action":"mock","response":{"status":200,"body":"...","headers":{}}}`
+- `block` — fail the request: `{"action":"block"}`
+- `redirect` — reroute to another URL: `{"action":"redirect","target":"https://..."}`
+- `delay` — add latency before forwarding: `{"action":"delay","delay":2000}`
+- `header` — modify request headers: `{"action":"header","setHeaders":{"X-Debug":"1"},"removeHeaders":["Cache-Control"]}`
+
+Unmatched requests pass through normally. Proxy and `cp net start` can run simultaneously on the same tab.
 
 ## Global Options
 

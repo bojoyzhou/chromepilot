@@ -38,10 +38,17 @@ API:
 
 import asyncio
 import json
+import os
 import uuid
 import socket
 import argparse
+import re
+import time
+import ssl
+import base64
 from collections import deque
+from urllib.parse import urlparse
+import aiohttp
 from aiohttp import web
 
 # ── State ─────────────────────────────────────────────────────
@@ -49,6 +56,89 @@ ws_client = None
 pending = {}              # req_id → Future
 event_buffer = deque(maxlen=500)
 sse_clients = []          # list of (queue, filter_types)
+
+# ── Proxy Persistence ─────────────────────────────────────────
+_PROXY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxy-rules.json")
+proxy_store = {}          # str(tabId) → {"rules": [...], "urlMatch"?: str}
+
+
+def _load_proxy_rules():
+    global proxy_store
+    try:
+        with open(_PROXY_FILE, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            print(f"[chromepilot] ⚠ Invalid proxy rules format, expected dict — starting fresh")
+            proxy_store = {}
+            return
+        proxy_store = data
+        if proxy_store:
+            print(f"[chromepilot] ↻ Loaded {len(proxy_store)} saved proxy rule set(s) from {os.path.basename(_PROXY_FILE)}")
+    except FileNotFoundError:
+        proxy_store = {}
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"[chromepilot] ⚠ Failed to load proxy rules: {e} — starting fresh")
+        proxy_store = {}
+
+
+def _save_proxy_rules():
+    try:
+        with open(_PROXY_FILE, "w") as f:
+            json.dump(proxy_store, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[chromepilot] ⚠ Failed to save proxy rules: {e}")
+
+
+async def _replay_proxy_rules():
+    """Replay persisted proxy rules to extension after reconnect."""
+    if not proxy_store:
+        return
+
+    # Global proxy takes priority
+    if "_global" in proxy_store:
+        data = proxy_store["_global"]
+        rules = data.get("rules", [])
+        if rules:
+            try:
+                cmd = {"action": "proxy_start_global", "rules": rules}
+                if data.get("whistleText"):
+                    cmd["whistleText"] = data["whistleText"]
+                result = await _send(cmd, timeout=10)
+                if "error" not in result:
+                    tab_count = result.get("tabCount", 0)
+                    print(f"[chromepilot] \u21BB Restored global proxy ({len(rules)} rules, {tab_count} tabs)")
+                else:
+                    print(f"[chromepilot] \u26A0 Global proxy restore failed: {result['error']}")
+            except Exception as e:
+                print(f"[chromepilot] \u26A0 Global proxy restore error: {e}")
+        return  # Don't replay per-tab if global is active
+
+    # Per-tab proxy rules
+    for tab_id_str, data in list(proxy_store.items()):
+        if tab_id_str == "_global":
+            continue
+        rules = data.get("rules", [])
+        if not rules:
+            continue
+        try:
+            cmd = {"action": "proxy_start", "tabId": int(tab_id_str), "rules": rules}
+            if data.get("urlMatch"):
+                cmd["urlMatch"] = data["urlMatch"]
+            result = await _send(cmd, timeout=10)
+            if "error" not in result:
+                print(f"[chromepilot] \u21BB Restored proxy for tab {tab_id_str} ({len(rules)} rules)")
+                # Push whistleText to extension so popup can display it
+                if data.get("whistleText"):
+                    await ws_client.send_json({
+                        "_event": True, "type": "proxy.set_whistle_text",
+                        "tabId": int(tab_id_str), "whistleText": data["whistleText"],
+                    })
+            else:
+                print(f"[chromepilot] \u26A0 Proxy restore failed for tab {tab_id_str}: {result['error']}")
+                del proxy_store[tab_id_str]
+                _save_proxy_rules()
+        except Exception as e:
+            print(f"[chromepilot] \u26A0 Proxy restore error for tab {tab_id_str}: {e}")
 
 # ── WebSocket Handler ─────────────────────────────────────────
 async def ws_handler(request):
@@ -58,6 +148,9 @@ async def ws_handler(request):
     ws_client = ws
     print("[chromepilot] ✓ Extension connected")
 
+    # Replay persisted proxy rules to extension
+    await _replay_proxy_rules()
+
     try:
         async for msg in ws:
             if msg.type != web.WSMsgType.TEXT:
@@ -66,13 +159,44 @@ async def ws_handler(request):
 
             # Real-time events from extension (network, console)
             if data.get("_event"):
+                evt_type = data["type"]
                 event = {
-                    "type": data["type"],
+                    "type": evt_type,
                     "tabId": data.get("tabId"),
                     "data": data.get("data"),
                     "ts": data.get("ts"),
                 }
                 event_buffer.append(event)
+
+                # Handle proxy rules updated from popup editor
+                if evt_type == "proxy.rules_updated":
+                    tab_id = str(data.get("tabId", ""))
+                    rules = data.get("rules", [])
+                    whistle_text = data.get("whistleText")
+                    if tab_id and tab_id in proxy_store:
+                        proxy_store[tab_id]["rules"] = rules
+                        if whistle_text is not None:
+                            proxy_store[tab_id]["whistleText"] = whistle_text
+                        _save_proxy_rules()
+                        print(f"[chromepilot] \u270E Proxy rules updated for tab {tab_id} ({len(rules)} rules)")
+
+                # Handle global proxy updated from popup editor
+                if evt_type == "proxy.global_updated":
+                    rules = data.get("rules", [])
+                    whistle_text = data.get("whistleText")
+                    proxy_store["_global"] = {"rules": rules}
+                    if whistle_text is not None:
+                        proxy_store["_global"]["whistleText"] = whistle_text
+                    _save_proxy_rules()
+                    print(f"[chromepilot] \u270E Global proxy updated ({len(rules)} rules)")
+
+                # Handle global proxy stopped
+                if evt_type == "proxy.global_stopped":
+                    if "_global" in proxy_store:
+                        del proxy_store["_global"]
+                        _save_proxy_rules()
+                    print(f"[chromepilot] \u2717 Global proxy stopped")
+
                 # Fan out to SSE clients
                 for queue, types in sse_clients:
                     if not types or any(event["type"].startswith(t) for t in types):
@@ -247,6 +371,213 @@ async def handle_page_info(request):
     })
 
 
+# Proxy (with persistence)
+async def handle_proxy_start(request):
+    err = _check()
+    if err:
+        return err
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    cmd = {"action": "proxy_start", **body}
+    timeout = cmd.pop("timeout", 30)
+    result = await _send(cmd, timeout=timeout)
+    if "error" in result:
+        return web.json_response({"error": result["error"]}, status=400)
+    result.pop("id", None)
+    # Persist
+    tab_id = str(result.get("tabId", body.get("tabId", "")))
+    if tab_id:
+        proxy_store[tab_id] = {"rules": body.get("rules", [])}
+        if body.get("urlMatch"):
+            proxy_store[tab_id]["urlMatch"] = body["urlMatch"]
+        _save_proxy_rules()
+    return web.json_response(result)
+
+async def handle_proxy_stop(request):
+    err = _check()
+    if err:
+        return err
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    cmd = {"action": "proxy_stop", **body}
+    result = await _send(cmd, timeout=30)
+    if "error" in result:
+        return web.json_response({"error": result["error"]}, status=400)
+    result.pop("id", None)
+    # Remove from persistence — find tabId from body or resolve
+    tab_id = str(body.get("tabId", ""))
+    if not tab_id:
+        # Try to find by urlMatch in store
+        for tid in list(proxy_store.keys()):
+            if proxy_store[tid].get("urlMatch") == body.get("urlMatch"):
+                tab_id = tid
+                break
+    if tab_id and tab_id in proxy_store:
+        del proxy_store[tab_id]
+        _save_proxy_rules()
+    return web.json_response(result)
+
+async def handle_proxy_update(request):
+    err = _check()
+    if err:
+        return err
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    cmd = {"action": "proxy_update", **body}
+    result = await _send(cmd, timeout=30)
+    if "error" in result:
+        return web.json_response({"error": result["error"]}, status=400)
+    result.pop("id", None)
+    # Update persistence
+    tab_id = str(body.get("tabId", ""))
+    if not tab_id:
+        for tid in list(proxy_store.keys()):
+            if proxy_store[tid].get("urlMatch") == body.get("urlMatch"):
+                tab_id = tid
+                break
+    if tab_id and tab_id in proxy_store:
+        proxy_store[tab_id]["rules"] = body.get("rules", [])
+        _save_proxy_rules()
+    return web.json_response(result)
+
+async def handle_proxy_list(request):
+    return await _forward("proxy_list", request, query_params={
+        "tabId": int, "urlMatch": str,
+    })
+
+async def handle_proxy_log(request):
+    return await _forward("proxy_log", request, query_params={
+        "tabId": int, "urlMatch": str, "limit": int,
+    })
+
+async def handle_proxy_clear_log(request):
+    return await _forward("proxy_clear_log", request)
+
+
+# Global Proxy (with persistence)
+async def handle_proxy_start_global(request):
+    err = _check()
+    if err:
+        return err
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    cmd = {"action": "proxy_start_global", **body}
+    timeout = cmd.pop("timeout", 30)
+    result = await _send(cmd, timeout=timeout)
+    if "error" in result:
+        return web.json_response({"error": result["error"]}, status=400)
+    result.pop("id", None)
+    # Persist
+    proxy_store["_global"] = {"rules": body.get("rules", [])}
+    if body.get("whistleText"):
+        proxy_store["_global"]["whistleText"] = body["whistleText"]
+    _save_proxy_rules()
+    return web.json_response(result)
+
+async def handle_proxy_stop_global(request):
+    err = _check()
+    if err:
+        return err
+    cmd = {"action": "proxy_stop_global"}
+    result = await _send(cmd, timeout=30)
+    if "error" in result:
+        return web.json_response({"error": result["error"]}, status=400)
+    result.pop("id", None)
+    if "_global" in proxy_store:
+        del proxy_store["_global"]
+        _save_proxy_rules()
+    return web.json_response(result)
+
+
+# Proxy Fetch — forward request via server with custom DNS (correct TLS SNI)
+class _IPResolver(aiohttp.abc.AbstractResolver):
+    """Resolve a specific hostname to a given IP, passthrough for others."""
+    def __init__(self, host, ip):
+        self._host = host
+        self._ip = ip
+
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        target = self._ip if host == self._host else host
+        return [{
+            "hostname": host, "host": target, "port": port,
+            "family": family, "proto": 0, "flags": 0,
+        }]
+
+    async def close(self):
+        pass
+
+
+async def handle_proxy_fetch(request):
+    """Fetch a URL with domain→IP override, preserving correct TLS SNI."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    original_url = body.get("url", "")
+    ip = body.get("ip", "")
+    host = body.get("host", "")
+    method = body.get("method", "GET")
+    req_headers = body.get("headers", {})
+
+    if not original_url or not ip or not host:
+        return web.json_response({"error": "url, ip, host required"}, status=400)
+
+    # Build clean request headers (remove hop-by-hop headers)
+    skip = {"host", "connection", "accept-encoding", "content-length", "transfer-encoding"}
+    clean_headers = {k: v for k, v in req_headers.items() if k.lower() not in skip}
+    clean_headers["Host"] = host
+
+    # SSL context: trust any cert (IP host mapping = dev tool)
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    resolver = _IPResolver(host, ip)
+    connector = aiohttp.TCPConnector(resolver=resolver, ssl=ssl_ctx)
+
+    try:
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.request(
+                method, original_url,
+                headers=clean_headers,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                resp_body = await resp.read()
+
+                # Collect response headers (skip hop-by-hop & encoding since we decompress)
+                resp_headers = {}
+                skip_resp = {"transfer-encoding", "content-encoding", "content-length"}
+                for k, v in resp.headers.items():
+                    if k.lower() not in skip_resp:
+                        resp_headers[k] = v
+                # Set correct content-length for the decompressed body
+                resp_headers["content-length"] = str(len(resp_body))
+
+                return web.json_response({
+                    "status": resp.status,
+                    "headers": resp_headers,
+                    "body": base64.b64encode(resp_body).decode(),
+                })
+    except Exception as e:
+        return web.json_response({"error": f"Fetch failed: {e}"}, status=502)
+    finally:
+        await connector.close()
+
+
 # SSE event stream
 async def handle_events(request):
     types_raw = request.query.get("types", "")
@@ -327,6 +658,17 @@ app.router.add_delete("/cookies", handle_cookie_delete)
 app.router.add_post("/screenshot", handle_screenshot)
 app.router.add_get("/page/info", handle_page_info)
 
+# Proxy
+app.router.add_post("/proxy/start", handle_proxy_start)
+app.router.add_post("/proxy/stop", handle_proxy_stop)
+app.router.add_post("/proxy/update", handle_proxy_update)
+app.router.add_get("/proxy/rules", handle_proxy_list)
+app.router.add_get("/proxy/log", handle_proxy_log)
+app.router.add_post("/proxy/clear-log", handle_proxy_clear_log)
+app.router.add_post("/proxy/start-global", handle_proxy_start_global)
+app.router.add_post("/proxy/stop-global", handle_proxy_stop_global)
+app.router.add_post("/proxy/fetch", handle_proxy_fetch)
+
 # Events
 app.router.add_get("/events", handle_events)
 
@@ -348,6 +690,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     lan_ip = _get_lan_ip()
+    _load_proxy_rules()
     print(f"[chromepilot] ChromePilot Server v2.0.0")
     print(f"[chromepilot] Listening on http://{lan_ip}:{args.port}")
     print(f"[chromepilot] Waiting for Chrome extension to connect...")

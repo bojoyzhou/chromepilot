@@ -545,6 +545,138 @@ def cmd_page(args):
         print(f"  Load:           {perf.get('load', '?')}ms")
 
 
+# ── Commands: Proxy ────────────────────────────────────────────
+def _parse_proxy_rules(args):
+    """Parse proxy rules from inline JSON or file."""
+    raw = None
+    if getattr(args, "file", None):
+        raw = Path(args.file).read_text(encoding="utf-8")
+    elif getattr(args, "rules", None):
+        raw = args.rules
+    if not raw:
+        print("Error: provide rules JSON or use -f FILE", file=sys.stderr)
+        sys.exit(1)
+    try:
+        rules = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"Error: invalid JSON: {e}", file=sys.stderr)
+        sys.exit(1)
+    if isinstance(rules, dict):
+        rules = [rules]
+    return rules
+
+
+def cmd_proxy_start(args):
+    rules = _parse_proxy_rules(args)
+    payload = {"rules": rules, **_tab_target(args)}
+    result = api_post("/proxy/start", args.port, payload)
+    _check_error(result)
+    if args.json:
+        _json_out(result)
+    else:
+        print(f"  Proxy active on tab {result.get('tabId', '?')}, {result.get('ruleCount', 0)} rule(s)")
+        for i, r in enumerate(rules):
+            action = r.get("action", "mock")
+            pat = r.get("pattern", "?")
+            ACTION_ICONS = {"mock": "📦", "block": "🚫", "redirect": "↪", "delay": "⏱", "header": "📝"}
+            icon = ACTION_ICONS.get(action, "•")
+            detail = ""
+            if action == "mock":
+                detail = f" → {r.get('response', r).get('status', 200)}"
+            elif action == "redirect":
+                detail = f" → {r.get('target', '?')}"
+            elif action == "delay":
+                detail = f" {r.get('delay', 1000)}ms"
+            elif action == "block":
+                detail = ""
+            elif action == "header":
+                h = r.get("setHeaders", {})
+                detail = f" +{len(h)} headers"
+            print(f"    {icon} {action:<8} /{pat}/{detail}")
+
+
+def cmd_proxy_stop(args):
+    result = api_post("/proxy/stop", args.port, _tab_target(args))
+    _check_error(result)
+    if args.json:
+        _json_out(result)
+    else:
+        print(f"  Proxy stopped. {result.get('logCount', 0)} requests were intercepted.")
+
+
+def cmd_proxy_update(args):
+    rules = _parse_proxy_rules(args)
+    payload = {"rules": rules, **_tab_target(args)}
+    result = api_post("/proxy/update", args.port, payload)
+    _check_error(result)
+    if args.json:
+        _json_out(result)
+    else:
+        print(f"  Rules updated: {result.get('ruleCount', 0)} rule(s)")
+
+
+def cmd_proxy_list(args):
+    params = {}
+    if args.tab:
+        params["tabId"] = args.tab
+    if args.url:
+        params["urlMatch"] = args.url
+    result = api_get("/proxy/rules", args.port, params)
+    _check_error(result)
+    if args.json:
+        _json_out(result)
+        return
+    if not result.get("active"):
+        print("  Proxy not active on this tab.")
+        return
+    rules = result.get("data", [])
+    print(f"  Proxy active on tab {result.get('tabId', '?')}, {len(rules)} rule(s):\n")
+    ACTION_ICONS = {"mock": "📦", "block": "🚫", "redirect": "↪", "delay": "⏱", "header": "📝"}
+    for i, r in enumerate(rules):
+        action = r.get("action", "mock")
+        icon = ACTION_ICONS.get(action, "•")
+        print(f"  {i+1}. {icon} {action:<8} /{r.get('pattern', '?')}/")
+
+
+def cmd_proxy_log(args):
+    params = {}
+    if args.tab:
+        params["tabId"] = args.tab
+    if args.url:
+        params["urlMatch"] = args.url
+    if args.limit:
+        params["limit"] = args.limit
+    result = api_get("/proxy/log", args.port, params)
+    _check_error(result)
+    if args.json:
+        _json_out(result)
+        return
+    entries = result.get("data", [])
+    total = result.get("total", len(entries))
+    if not entries:
+        print("  No proxy hits yet.")
+        return
+    print(f"  {total} hit(s):\n")
+    ACTION_ICONS = {"mock": "📦", "block": "🚫", "redirect": "↪", "delay": "⏱", "header": "📝"}
+    for e in entries:
+        icon = ACTION_ICONS.get(e.get("action", ""), "•")
+        method = e.get("method", "?")
+        url_short = (e.get("url", ""))[:80]
+        detail = e.get("detail", "")
+        print(f"  {icon} {method:<4} {url_short}")
+        if detail:
+            print(f"         {detail}")
+
+
+def cmd_proxy_clear_log(args):
+    result = api_post("/proxy/clear-log", args.port, _tab_target(args))
+    _check_error(result)
+    if args.json:
+        _json_out(result)
+    else:
+        print("  Proxy log cleared.")
+
+
 # ── Commands: Storage ─────────────────────────────────────────
 def cmd_storage_list(args):
     store = "sessionStorage" if args.session else "localStorage"
@@ -771,6 +903,39 @@ def build_parser():
     p_pg.add_argument("--tab", "-t", type=int, help="Tab ID")
     p_pg.add_argument("--url", "-u", help="Match by URL")
 
+    # proxy
+    p_px = sub.add_parser("proxy", help="Proxy rules (mock/block/redirect/delay/header)")
+    px_sub = p_px.add_subparsers(dest="proxy_action", metavar="ACTION")
+
+    p_pxs = px_sub.add_parser("start", help="Start proxy with rules")
+    p_pxs.add_argument("rules", nargs="?", help="JSON rules inline")
+    p_pxs.add_argument("--file", "-f", help="Load rules from JSON file")
+    p_pxs.add_argument("--tab", "-t", type=int, help="Tab ID")
+    p_pxs.add_argument("--url", "-u", help="Match by URL")
+
+    p_pxp = px_sub.add_parser("stop", help="Stop proxy")
+    p_pxp.add_argument("--tab", "-t", type=int, help="Tab ID")
+    p_pxp.add_argument("--url", "-u", help="Match by URL")
+
+    p_pxu = px_sub.add_parser("update", help="Update proxy rules")
+    p_pxu.add_argument("rules", nargs="?", help="JSON rules inline")
+    p_pxu.add_argument("--file", "-f", help="Load rules from JSON file")
+    p_pxu.add_argument("--tab", "-t", type=int, help="Tab ID")
+    p_pxu.add_argument("--url", "-u", help="Match by URL")
+
+    p_pxl = px_sub.add_parser("list", help="List active rules")
+    p_pxl.add_argument("--tab", "-t", type=int, help="Tab ID")
+    p_pxl.add_argument("--url", "-u", help="Match by URL")
+
+    p_pxg = px_sub.add_parser("log", help="View proxy hit log")
+    p_pxg.add_argument("--tab", "-t", type=int, help="Tab ID")
+    p_pxg.add_argument("--url", "-u", help="Match by URL")
+    p_pxg.add_argument("--limit", "-n", type=int, help="Limit results")
+
+    p_pxc = px_sub.add_parser("clear-log", help="Clear hit log")
+    p_pxc.add_argument("--tab", "-t", type=int, help="Tab ID")
+    p_pxc.add_argument("--url", "-u", help="Match by URL")
+
     # storage
     p_st = sub.add_parser("storage", help="localStorage / sessionStorage")
     st_sub = p_st.add_subparsers(dest="storage_action", metavar="ACTION")
@@ -871,6 +1036,22 @@ def main():
             cookie_dispatch[args.cookie_action](args)
         else:
             print("Usage: cp cookie {list|set|delete}", file=sys.stderr)
+        return
+
+    # Proxy subcommands
+    if args.command == "proxy":
+        proxy_dispatch = {
+            "start": cmd_proxy_start,
+            "stop": cmd_proxy_stop,
+            "update": cmd_proxy_update,
+            "list": cmd_proxy_list,
+            "log": cmd_proxy_log,
+            "clear-log": cmd_proxy_clear_log,
+        }
+        if args.proxy_action in proxy_dispatch:
+            proxy_dispatch[args.proxy_action](args)
+        else:
+            print("Usage: cp proxy {start|stop|update|list|log|clear-log}", file=sys.stderr)
         return
 
     # Storage subcommands

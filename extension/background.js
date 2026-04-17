@@ -35,6 +35,71 @@ const consoleBuffers = new Map();   // tabId → [console entries]
 const debuggerTabs   = new Set();   // tabs with debugger attached
 const interceptRules = new Map();   // tabId → [rules]
 const pendingBodies  = new Map();   // tabId → Map(requestId → {resolve, timer})
+const proxyState     = new Map();   // tabId → { rules: [], log: [] }
+let   globalProxy    = null;        // null | { rules: [], whistleText: '' }
+
+// ── Global Proxy ─────────────────────────────────────────────
+async function attachGlobalProxy(tabId) {
+  if (!globalProxy) return false;
+  if (proxyState.has(tabId)) return true;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.url && (tab.url.startsWith("chrome") || tab.url.startsWith("devtools://"))) {
+      console.log(`[globalProxy] skip tab ${tabId}: ${tab.url?.slice(0,30)}`);
+      return false;
+    }
+    if (!await ensureDebugger(tabId)) {
+      console.warn(`[globalProxy] debugger attach failed for tab ${tabId}: ${tab.url?.slice(0,60)}`);
+      return false;
+    }
+    proxyState.set(tabId, { rules: globalProxy.rules, log: [], _global: true, whistleText: globalProxy.whistleText });
+    // If any rule uses IP host mapping (setHost), ignore cert errors for HTTPS→IP redirect
+    if (globalProxy.rules.some(r => r.setHost)) {
+      try { await chrome.debugger.sendCommand({ tabId }, "Security.setIgnoreCertificateErrors", { override: true }); } catch {}
+    }
+    await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", {
+      patterns: [{ urlPattern: "*", requestStage: "Request" }],
+    });
+    console.log(`[globalProxy] attached tab ${tabId}: ${tab.url?.slice(0,60)}`);
+    return true;
+  } catch (e) {
+    console.error(`[globalProxy] error attaching tab ${tabId}:`, e);
+    return false;
+  }
+}
+
+async function startGlobalProxy(rules, whistleText) {
+  globalProxy = { rules, whistleText: whistleText || "" };
+  const tabs = await chrome.tabs.query({});
+  let n = 0;
+  for (const t of tabs) { if (await attachGlobalProxy(t.id)) n++; }
+  return n;
+}
+
+async function stopGlobalProxy() {
+  if (!globalProxy) return;
+  globalProxy = null;
+  for (const [tabId, st] of [...proxyState.entries()]) {
+    if (!st._global) continue;
+    proxyState.delete(tabId);
+    if (!interceptRules.has(tabId)) {
+      try { await chrome.debugger.sendCommand({ tabId }, "Fetch.disable"); } catch {}
+    }
+    if (!debuggerStillNeeded(tabId)) await detachDebugger(tabId);
+  }
+}
+
+function updateGlobalRules(rules, whistleText) {
+  if (!globalProxy) return;
+  globalProxy.rules = rules;
+  if (whistleText !== undefined) globalProxy.whistleText = whistleText;
+  for (const [, st] of proxyState.entries()) {
+    if (st._global) {
+      st.rules = rules;
+      if (whistleText !== undefined) st.whistleText = whistleText;
+    }
+  }
+}
 
 // ── WebSocket Connection ─────────────────────────────────────
 function connect() {
@@ -93,6 +158,7 @@ async function ensureDebugger(tabId) {
     debuggerTabs.add(tabId);
     return true;
   } catch (e) {
+    console.warn(`[debugger] attach failed tab ${tabId}:`, e.message);
     return false;
   }
 }
@@ -105,13 +171,20 @@ async function detachDebugger(tabId) {
 
 // Check if debugger is still needed for this tab
 function debuggerStillNeeded(tabId) {
-  return networkBuffers.has(tabId) || consoleBuffers.has(tabId) || interceptRules.has(tabId);
+  return networkBuffers.has(tabId) || consoleBuffers.has(tabId) || interceptRules.has(tabId) || proxyState.has(tabId);
 }
 
 // ── Command Router ───────────────────────────────────────────
 async function handleCommand(cmd) {
   const id = cmd.id;
-  if (!id) return; // ignore events echoed back
+  if (!id) {
+    // Handle server-pushed events (no id = not a command response)
+    if (cmd._event && cmd.type === "proxy.set_whistle_text") {
+      const pState = proxyState.get(cmd.tabId);
+      if (pState) pState.whistleText = cmd.whistleText;
+    }
+    return;
+  }
 
   try {
     const handler = HANDLERS[cmd.action];
@@ -321,10 +394,83 @@ const HANDLERS = {
     const tabId = await resolveTabId(cmd);
     if (!tabId) return { error: "No matching tab" };
     interceptRules.delete(tabId);
-    try {
-      await chrome.debugger.sendCommand({ tabId }, "Fetch.disable");
-    } catch {}
+    // Only disable Fetch if proxy is not also using it on this tab
+    if (!proxyState.has(tabId)) {
+      try {
+        await chrome.debugger.sendCommand({ tabId }, "Fetch.disable");
+      } catch {}
+    }
     if (!debuggerStillNeeded(tabId)) await detachDebugger(tabId);
+    return { ok: true };
+  },
+
+  // -- Proxy (Whistle-like) --
+  async proxy_start(cmd) {
+    const tabId = await resolveTabId(cmd);
+    if (!tabId) return { error: "No matching tab" };
+    if (!await ensureDebugger(tabId)) {
+      return { error: "Cannot attach debugger. Close DevTools for this tab first." };
+    }
+    const rules = cmd.rules || [];
+    proxyState.set(tabId, { rules, log: [] });
+    await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", {
+      patterns: [{ urlPattern: "*", requestStage: "Request" }],
+    });
+    return { ok: true, tabId, ruleCount: rules.length };
+  },
+
+  async proxy_stop(cmd) {
+    const tabId = await resolveTabId(cmd);
+    if (!tabId) return { error: "No matching tab" };
+    const state = proxyState.get(tabId);
+    const logCount = state?.log?.length || 0;
+    proxyState.delete(tabId);
+    if (!interceptRules.has(tabId)) {
+      try { await chrome.debugger.sendCommand({ tabId }, "Fetch.disable"); } catch {}
+    }
+    if (!debuggerStillNeeded(tabId)) await detachDebugger(tabId);
+    return { ok: true, logCount };
+  },
+
+  async proxy_update(cmd) {
+    const tabId = await resolveTabId(cmd);
+    const state = proxyState.get(tabId);
+    if (!state) return { error: "Proxy not active on this tab. Start with proxy_start first." };
+    state.rules = cmd.rules || [];
+    return { ok: true, ruleCount: state.rules.length };
+  },
+
+  async proxy_list(cmd) {
+    const tabId = await resolveTabId(cmd);
+    const state = proxyState.get(tabId);
+    if (!state) return { data: [], active: false };
+    return { data: state.rules, active: true, tabId };
+  },
+
+  async proxy_log(cmd) {
+    const tabId = await resolveTabId(cmd);
+    const state = proxyState.get(tabId);
+    let log = state?.log || [];
+    if (cmd.limit) log = log.slice(-cmd.limit);
+    return { data: log, total: (state?.log || []).length };
+  },
+
+  async proxy_clear_log(cmd) {
+    const tabId = await resolveTabId(cmd);
+    const state = proxyState.get(tabId);
+    if (state) state.log = [];
+    return { ok: true };
+  },
+
+  // -- Global Proxy --
+  async proxy_start_global(cmd) {
+    const rules = cmd.rules || [];
+    const n = await startGlobalProxy(rules, cmd.whistleText);
+    return { ok: true, global: true, ruleCount: rules.length, tabCount: n };
+  },
+
+  async proxy_stop_global() {
+    await stopGlobalProxy();
     return { ok: true };
   },
 
@@ -503,11 +649,168 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     }
   }
 
-  // ─ Fetch interception ─
+  // ─ Fetch interception (proxy + legacy intercept) ─
   if (method === "Fetch.requestPaused") {
+    const url = params.request.url;
+
+    // --- Proxy rules (two-pass: header modifiers + main action) ---
+    const pState = proxyState.get(tabId);
+    if (pState) {
+      // Pass 1: collect header modifiers from all matching 'header' rules
+      // Pass 2: find first matching non-header rule as the "main action"
+      const headerMods = {};
+      let actionRule = null;
+
+      for (const r of pState.rules) {
+        let matches;
+        try { matches = new RegExp(r.pattern).test(url); }
+        catch { matches = url.includes(r.pattern); }
+        if (!matches) continue;
+
+        if ((r.action || "mock") === "header") {
+          Object.assign(headerMods, r.setHeaders || {});
+        } else if (!actionRule) {
+          actionRule = r;
+        }
+      }
+
+      const hasHeaderMods = Object.keys(headerMods).length > 0;
+
+      if (actionRule || hasHeaderMods) {
+        // Helper: apply headerMods to a headers object → CDP headers array
+        function buildHeaders(original) {
+          const headers = Object.entries(original || {}).map(([n, v]) => ({ name: n, value: v }));
+          for (const [k, v] of Object.entries(headerMods)) {
+            const idx = headers.findIndex(h => h.name.toLowerCase() === k.toLowerCase());
+            if (idx >= 0) headers[idx].value = v;
+            else headers.push({ name: k, value: v });
+          }
+          return headers;
+        }
+
+        const rule = actionRule || { action: "header", pattern: Object.keys(headerMods).join(",") };
+        const action = rule.action || "mock";
+
+        const logEntry = {
+          url, method: params.request.method,
+          pattern: rule.pattern, action,
+          ts: Date.now(),
+        };
+        if (hasHeaderMods && action !== "header") {
+          logEntry.headerMods = Object.keys(headerMods).join(", ");
+        }
+
+        if (action === "block") {
+          chrome.debugger.sendCommand({ tabId }, "Fetch.failRequest", {
+            requestId: params.requestId,
+            reason: "Failed",
+          });
+          logEntry.detail = "blocked";
+
+        } else if (action === "redirect") {
+          let targetUrl = rule.target;
+          try {
+            const re = new RegExp(rule.pattern);
+            targetUrl = url.replace(re, rule.target);
+          } catch {}
+
+          if (rule.setHost) {
+            // IP host mapping: proxy through server.py with correct TLS SNI
+            const ipMatch = targetUrl.match(/(\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?)/);
+            const ip = ipMatch ? ipMatch[1] : null;
+            if (ip) {
+              // Merge headerMods into the request headers sent to server
+              const mergedHeaders = { ...params.request.headers, ...headerMods };
+              (async () => {
+                try {
+                  const resp = await fetch('http://127.0.0.1:8787/proxy/fetch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      url, ip, host: rule.setHost,
+                      method: params.request.method,
+                      headers: mergedHeaders,
+                    }),
+                  });
+                  const data = await resp.json();
+                  if (data.error) throw new Error(data.error);
+                  const rHeaders = Object.entries(data.headers || {}).map(
+                    ([n, v]) => ({ name: n, value: String(v) })
+                  );
+                  await chrome.debugger.sendCommand({ tabId }, "Fetch.fulfillRequest", {
+                    requestId: params.requestId,
+                    responseCode: data.status || 200,
+                    responseHeaders: rHeaders,
+                    body: data.body || "",
+                  });
+                } catch (e) {
+                  console.error(`[proxy] IP fetch failed for ${url}:`, e.message);
+                  chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", {
+                    requestId: params.requestId,
+                  });
+                }
+              })();
+              logEntry.detail = `⇄ ${rule.setHost} → ${ip}`;
+            } else {
+              const cmd = { requestId: params.requestId, url: targetUrl };
+              if (hasHeaderMods) cmd.headers = buildHeaders(params.request.headers);
+              chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", cmd);
+              logEntry.detail = `→ ${targetUrl}`;
+            }
+          } else {
+            const cmd = { requestId: params.requestId, url: targetUrl };
+            if (hasHeaderMods) cmd.headers = buildHeaders(params.request.headers);
+            chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", cmd);
+            logEntry.detail = `→ ${targetUrl}`;
+          }
+
+        } else if (action === "delay") {
+          const ms = rule.delay || 1000;
+          setTimeout(() => {
+            const cmd = { requestId: params.requestId };
+            if (hasHeaderMods) cmd.headers = buildHeaders(params.request.headers);
+            chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", cmd);
+          }, ms);
+          logEntry.detail = `${ms}ms`;
+
+        } else if (action === "header") {
+          // Pure header modification (no other action matched)
+          const headers = buildHeaders(params.request.headers);
+          chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", {
+            requestId: params.requestId,
+            headers,
+          });
+          logEntry.detail = `headers: ${Object.keys(headerMods).join(", ")}`;
+
+        } else {
+          // mock (default)
+          const resp = rule.response || rule;
+          const rHeaders = Object.entries(resp.headers || {}).map(
+            ([n, v]) => ({ name: n, value: String(v) })
+          );
+          if (!rHeaders.find(h => h.name.toLowerCase() === "content-type")) {
+            rHeaders.push({ name: "content-type", value: "application/json" });
+          }
+          const bodyStr = typeof resp.body === "string" ? resp.body : JSON.stringify(resp.body || "");
+          chrome.debugger.sendCommand({ tabId }, "Fetch.fulfillRequest", {
+            requestId: params.requestId,
+            responseCode: resp.status || 200,
+            responseHeaders: rHeaders,
+            body: btoa(unescape(encodeURIComponent(bodyStr))),
+          });
+          logEntry.detail = `mock ${resp.status || 200}`;
+        }
+
+        pState.log.push(logEntry);
+        pushEvent("proxy.hit", tabId, logEntry);
+        return;  // handled by proxy, skip legacy intercept
+      }
+    }
+
+    // --- Legacy intercept rules (backward compat) ---
     const rules = interceptRules.get(tabId) || [];
     const matched = rules.find(rule => {
-      try { return new RegExp(rule.urlPattern).test(params.request.url); }
+      try { return new RegExp(rule.urlPattern).test(url); }
       catch { return false; }
     });
 
@@ -523,7 +826,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
         responseHeaders: headers,
         body: btoa(unescape(encodeURIComponent(typeof resp.body === "string" ? resp.body : JSON.stringify(resp.body)))),
       });
-      pushEvent("net.intercepted", tabId, { url: params.request.url, action: "mock" });
+      pushEvent("net.intercepted", tabId, { url, action: "mock" });
     } else {
       chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", {
         requestId: params.requestId,
@@ -565,6 +868,122 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   }
 });
 
+// ── Popup Communication ──────────────────────────────────────
+// Handles messages from popup.html to query state and control features.
+// Adding support for a new module? Add a case in handlePopupMessage().
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  handlePopupMessage(msg).then(sendResponse).catch(e => sendResponse({ error: e.message }));
+  return true; // async response
+});
+
+async function handlePopupMessage(msg) {
+  switch (msg.type) {
+    case "getState":
+      return await buildPopupState();
+    case "proxyStop":
+      return await HANDLERS.proxy_stop({ tabId: msg.tabId });
+    case "proxyClearLog":
+      return await HANDLERS.proxy_clear_log({ tabId: msg.tabId });
+    case "proxyUpdate":
+      return await HANDLERS.proxy_update({ tabId: msg.tabId, rules: msg.rules });
+    case "proxyUpdateRules": {
+      // Update rules in extension state
+      const result = await HANDLERS.proxy_update({ tabId: msg.tabId, rules: msg.rules });
+      // Store whistle text alongside rules
+      const pState = proxyState.get(msg.tabId);
+      if (pState && msg.whistleText !== undefined) {
+        pState.whistleText = msg.whistleText;
+      }
+      // Also notify server to persist the change
+      send({ _event: true, type: "proxy.rules_updated", tabId: msg.tabId, rules: msg.rules, whistleText: msg.whistleText, ts: Date.now() });
+      return result;
+    }
+    case "proxyStartGlobal": {
+      const rules = msg.rules || [];
+      const n = await startGlobalProxy(rules, msg.whistleText);
+      send({ _event: true, type: "proxy.global_updated", rules, whistleText: msg.whistleText, ts: Date.now() });
+      return { ok: true, global: true, tabCount: n };
+    }
+    case "proxyStopGlobal": {
+      await stopGlobalProxy();
+      send({ _event: true, type: "proxy.global_stopped", ts: Date.now() });
+      return { ok: true };
+    }
+    case "proxyUpdateGlobalRules": {
+      const rules = msg.rules || [];
+      updateGlobalRules(rules, msg.whistleText);
+      send({ _event: true, type: "proxy.global_updated", rules, whistleText: msg.whistleText, ts: Date.now() });
+      return { ok: true, ruleCount: rules.length };
+    }
+    case "proxyGlobalClearLog": {
+      for (const [, st] of proxyState.entries()) {
+        if (st._global) st.log = [];
+      }
+      return { ok: true };
+    }
+    default:
+      return { error: `Unknown popup message: ${msg.type}` };
+  }
+}
+
+async function buildPopupState() {
+  const connected = ws && ws.readyState === WebSocket.OPEN;
+
+  // Collect all tabs with active features
+  const activeTabIds = new Set([
+    ...networkBuffers.keys(),
+    ...consoleBuffers.keys(),
+    ...interceptRules.keys(),
+    ...proxyState.keys(),
+  ]);
+
+  const featureTabs = [];
+  for (const tabId of activeTabIds) {
+    const pState = proxyState.get(tabId);
+    featureTabs.push({
+      tabId,
+      features: {
+        network: networkBuffers.has(tabId),
+        console: consoleBuffers.has(tabId),
+        intercept: interceptRules.has(tabId),
+        proxy: !!pState,
+      },
+      networkCount: (networkBuffers.get(tabId) || []).length,
+      consoleCount: (consoleBuffers.get(tabId) || []).length,
+      proxy: pState ? { rules: pState.rules, log: pState.log, whistleText: pState.whistleText } : null,
+    });
+  }
+
+  // Get browser tabs for display names
+  let browserTabs = [];
+  try {
+    const allTabs = await chrome.tabs.query({});
+    browserTabs = allTabs.map(t => ({
+      tabId: t.id, url: t.url, title: t.title, active: t.active,
+    }));
+  } catch {}
+
+  // Global proxy state (aggregated from all _global tabs)
+  let globalProxyState = null;
+  if (globalProxy) {
+    globalProxyState = {
+      active: true,
+      rules: globalProxy.rules,
+      whistleText: globalProxy.whistleText || '',
+      tabCount: [...proxyState.entries()].filter(([, st]) => st._global).length,
+      log: [],
+    };
+    for (const [, st] of proxyState.entries()) {
+      if (st._global && st.log) {
+        globalProxyState.log.push(...st.log);
+      }
+    }
+    globalProxyState.log.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  }
+
+  return { connected, tabs: featureTabs, browserTabs, globalProxy: globalProxyState };
+}
+
 // ── Cleanup ──────────────────────────────────────────────────
 chrome.debugger.onDetach.addListener((source) => {
   const tabId = source.tabId;
@@ -572,6 +991,7 @@ chrome.debugger.onDetach.addListener((source) => {
   networkBuffers.delete(tabId);
   consoleBuffers.delete(tabId);
   interceptRules.delete(tabId);
+  proxyState.delete(tabId);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -579,6 +999,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   networkBuffers.delete(tabId);
   consoleBuffers.delete(tabId);
   interceptRules.delete(tabId);
+  proxyState.delete(tabId);
 });
 
 // ── Lifecycle ────────────────────────────────────────────────
@@ -590,4 +1011,29 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.runtime.onInstalled.addListener(() => connect());
 chrome.runtime.onStartup.addListener(() => connect());
+
+// ── Tab Listeners (Global Proxy Auto-Attach) ──────────────────
+// Attach as early as possible: on 'loading' status when URL is known.
+// Also try on 'complete' as fallback (some tabs skip loading event).
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!globalProxy) return;
+  if (proxyState.has(tabId)) return;  // already attached
+  // Attach when URL becomes available and navigation starts
+  if (changeInfo.url || changeInfo.status === 'loading' || changeInfo.status === 'complete') {
+    if (tab.url && !tab.url.startsWith('chrome') && !tab.url.startsWith('about:') && !tab.url.startsWith('devtools://')) {
+      attachGlobalProxy(tabId);
+    }
+  }
+});
+
+// Also attach on tab creation (catches tabs opened via window.open, ctrl+click, etc.)
+chrome.tabs.onCreated.addListener((tab) => {
+  if (!globalProxy) return;
+  // New tabs may start as about:blank, attach early — Fetch.enable will catch subsequent navigation
+  if (tab.id) {
+    // Delay slightly to let Chrome assign the pending URL
+    setTimeout(() => attachGlobalProxy(tab.id), 100);
+  }
+});
+
 connect();

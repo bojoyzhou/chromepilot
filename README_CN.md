@@ -30,6 +30,7 @@ AI Agent ──HTTP──▸ ChromePilot Server ──WebSocket──▸ Chrome 
 | `fetch()` 自动带 Cookie | 是（MAIN world） | 否（隔离上下文） | 否 |
 | 网络捕获 | 是（扩展内 CDP） | 否 | 是 |
 | 请求拦截 & Mock | 是 | 否 | 是 |
+| 代理规则（block/redirect/delay/header） | 是（5 种动作） | 否 | 有限 |
 | Console 捕获 | 是 | 否 | 是 |
 | Cookie 管理 | 是（chrome.cookies API） | 通过 CLI | 通过 CDP |
 | 配置复杂度 | 安装扩展 | 安装二进制 + 配置 | 安装浏览器 + 驱动 |
@@ -245,6 +246,40 @@ cp page --url myapp
 #   Load:           1203ms
 ```
 
+### 代理规则 — Mock / Block / Redirect / Delay / Header
+
+ChromePilot 的 proxy 系统可以对任意标签页的请求应用丰富的拦截规则。支持 5 种动作：`mock`（返回自定义响应）、`block`（阻断请求）、`redirect`（重定向到其他 URL）、`delay`（增加延迟）和 `header`（增删改请求头）。
+
+```bash
+# 启动代理，设置多条规则
+cp proxy start '[
+  {"pattern": "api/billing", "action": "mock", "response": {"status": 200, "body": {"plan": "enterprise"}}},
+  {"pattern": "tracking\\.js",  "action": "block"},
+  {"pattern": "cdn\\.old\\.com", "action": "redirect", "target": "https://cdn.new.com"},
+  {"pattern": "slow-api",       "action": "delay", "delay": 3000},
+  {"pattern": "api/config",     "action": "header", "setHeaders": {"X-Debug": "true"}, "removeHeaders": ["Cache-Control"]}
+]' --url myapp
+
+# 查看命中日志
+cp proxy log --url myapp
+#   📦 GET  https://myapp.com/api/billing          mock 200
+#   🚫 GET  https://myapp.com/tracking.js           blocked
+#   ↪ GET  https://cdn.old.com/bundle.js            → https://cdn.new.com/bundle.js
+#   ⏱ POST https://myapp.com/slow-api              3000ms
+#   📝 GET  https://myapp.com/api/config            headers: +1 -1
+
+# 热更新规则（无需重启）
+cp proxy update '[{"pattern": "api/billing", "action": "mock", "response": {"status": 403, "body": {"error": "forbidden"}}}]' --url myapp
+
+# 查看当前规则
+cp proxy list --url myapp
+
+# 停止代理
+cp proxy stop --url myapp
+```
+
+与底层的 `cp net intercept`（仅支持 mock 响应）不同，proxy 系统提供 5 种动作、命中日志、热更新规则，且可与网络捕获同时运行互不干扰。
+
 ## 命令参考
 
 ### 全局选项
@@ -311,6 +346,15 @@ cp screenshot [output.png] [--format jpeg]   # 截取可见区域
 
 # 页面信息
 cp page [--tab ID]                           # URL、标题、加载时间、存储统计
+
+# 代理规则（mock / block / redirect / delay / header）
+cp proxy start 'RULES_JSON' [--tab ID]       # 启动代理并设置规则
+cp proxy start -f rules.json [--tab ID]      # 从文件加载规则
+cp proxy list [--tab ID]                     # 查看当前生效规则
+cp proxy log [--tab ID] [-n 20]              # 查看命中日志
+cp proxy update 'RULES_JSON'                 # 热更新规则
+cp proxy clear-log                           # 清空命中日志
+cp proxy stop                                # 停止代理
 
 # 存储
 cp storage list [--session]                  # 列出 localStorage/sessionStorage 键

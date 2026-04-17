@@ -30,6 +30,7 @@ Every existing browser automation tool faces the same fundamental problem: **the
 | `fetch()` sends cookies | Yes (MAIN world) | No (isolated context) | No |
 | Network capture | Yes (in-extension CDP) | No | Yes |
 | Request interception & mock | Yes | No | Yes |
+| Proxy rules (block/redirect/delay/header) | Yes (5 actions) | No | Limited |
 | Console capture | Yes | No | Yes |
 | Cookie management | Yes (chrome.cookies API) | Via CLI | Via CDP |
 | Setup complexity | Install extension | Install binary + config | Install browser + driver |
@@ -245,6 +246,40 @@ cp page --url myapp
 #   Load:            1203ms
 ```
 
+### Proxy Rules — Mock, Block, Redirect, Delay, Modify Headers
+
+ChromePilot's proxy system lets you apply rich rules to intercept requests on any tab. Five actions are supported: `mock` (return custom response), `block` (fail the request), `redirect` (reroute to another URL), `delay` (add latency), and `header` (add/remove/modify request headers).
+
+```bash
+# Start proxy with multiple rules
+cp proxy start '[
+  {"pattern": "api/billing", "action": "mock", "response": {"status": 200, "body": {"plan": "enterprise"}}},
+  {"pattern": "tracking\\.js",  "action": "block"},
+  {"pattern": "cdn\\.old\\.com", "action": "redirect", "target": "https://cdn.new.com"},
+  {"pattern": "slow-api",       "action": "delay", "delay": 3000},
+  {"pattern": "api/config",     "action": "header", "setHeaders": {"X-Debug": "true"}, "removeHeaders": ["Cache-Control"]}
+]' --url myapp
+
+# Watch what gets intercepted
+cp proxy log --url myapp
+#   📦 GET  https://myapp.com/api/billing          mock 200
+#   🚫 GET  https://myapp.com/tracking.js           blocked
+#   ↪ GET  https://cdn.old.com/bundle.js            → https://cdn.new.com/bundle.js
+#   ⏱ POST https://myapp.com/slow-api              3000ms
+#   📝 GET  https://myapp.com/api/config            headers: +1 -1
+
+# Hot-update rules without restarting
+cp proxy update '[{"pattern": "api/billing", "action": "mock", "response": {"status": 403, "body": {"error": "forbidden"}}}]' --url myapp
+
+# Check current rules
+cp proxy list --url myapp
+
+# Stop proxy
+cp proxy stop --url myapp
+```
+
+Unlike the lower-level `cp net intercept` (which only supports mock responses), the proxy system offers five distinct actions, hit logging, hot-reload of rules, and works alongside network capture without interference.
+
 ## Command Reference
 
 ### Global Options
@@ -311,6 +346,15 @@ cp screenshot [output.png] [--format jpeg]   # Capture visible area
 
 # Page Info
 cp page [--tab ID]                           # URL, title, load times, storage stats
+
+# Proxy Rules (mock / block / redirect / delay / header)
+cp proxy start 'RULES_JSON' [--tab ID]       # Start proxy with rules
+cp proxy start -f rules.json [--tab ID]      # Load rules from file
+cp proxy list [--tab ID]                     # Show active rules
+cp proxy log [--tab ID] [-n 20]              # View intercepted requests
+cp proxy update 'RULES_JSON'                 # Hot-update rules
+cp proxy clear-log                           # Clear hit log
+cp proxy stop                                # Stop proxy
 
 # Storage
 cp storage list [--session]                  # List localStorage/sessionStorage keys
