@@ -8,6 +8,27 @@ const DEFAULT_WS = "ws://127.0.0.1:8787/ws";
 let ws = null;
 let wsUrl = DEFAULT_WS;
 
+// ── Icon State ────────────────────────────────────────────────
+function setIconConnected() {
+  chrome.action.setIcon({
+    path: { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" },
+  });
+  chrome.action.setBadgeText({ text: "" });
+  chrome.action.setTitle({ title: "ChromePilot — Connected" });
+}
+
+function setIconDisconnected() {
+  chrome.action.setIcon({
+    path: { "16": "icon16_gray.png", "32": "icon32_gray.png", "48": "icon48_gray.png", "128": "icon128_gray.png" },
+  });
+  chrome.action.setBadgeText({ text: "OFF" });
+  chrome.action.setBadgeBackgroundColor({ color: "#EA4335" });
+  chrome.action.setTitle({ title: "ChromePilot — Disconnected" });
+}
+
+// Start with disconnected state
+setIconDisconnected();
+
 // ── State ────────────────────────────────────────────────────
 const networkBuffers = new Map();   // tabId → [request entries]
 const consoleBuffers = new Map();   // tabId → [console entries]
@@ -22,6 +43,7 @@ function connect() {
     ws = new WebSocket(wsUrl);
     ws.onopen = () => {
       console.log("[chromepilot] Connected to server");
+      setIconConnected();
       chrome.alarms.create("keepalive", { periodInMinutes: 0.4 });
     };
     ws.onmessage = (event) => {
@@ -30,9 +52,10 @@ function connect() {
     };
     ws.onclose = () => {
       ws = null;
+      setIconDisconnected();
       chrome.alarms.create("reconnect", { delayInMinutes: 0.05 });
     };
-    ws.onerror = () => { ws = null; };
+    ws.onerror = () => { ws = null; setIconDisconnected(); };
   } catch (e) {
     console.error("[chromepilot] Connect error:", e);
     chrome.alarms.create("reconnect", { delayInMinutes: 0.1 });
