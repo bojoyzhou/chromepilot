@@ -198,6 +198,36 @@ function parseWhistleRules(text) {
       continue;
     }
 
+    // resHeaders:// as target — modify response headers (e.g. CORS)
+    // Syntax: pattern resHeaders://(Header: Value) or resHeaders://Header:Value
+    if (dst.startsWith('resHeaders://')) {
+      let headerContent = dst.slice('resHeaders://'.length);
+      if (headerContent.startsWith('(') && headerContent.endsWith(')')) {
+        headerContent = headerContent.slice(1, -1);
+      }
+      const setHeaders = {};
+      for (const part of headerContent.split(/\\n|\n/)) {
+        const colonIdx = part.indexOf(':');
+        if (colonIdx > 0) {
+          setHeaders[part.slice(0, colonIdx).trim()] = part.slice(colonIdx + 1).trim();
+        }
+      }
+      if (Object.keys(setHeaders).length === 0) continue;
+      let pattern;
+      if (src.startsWith('^')) {
+        const domain = src.slice(1);
+        const escaped = domain.replace(/\./g, '\\.').replace(/\*\*\*/g, '(.*)').replace(/\*/g, '[^/]*');
+        pattern = '^https?://' + escaped;
+      } else if (src.startsWith('http://') || src.startsWith('https://')) {
+        pattern = '^' + src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      } else {
+        const escaped = src.replace(/\./g, '\\.').replace(/\*/g, '[^.]*');
+        pattern = '^https?://' + escaped;
+      }
+      rules.push({ pattern, action: 'resHeader', setHeaders });
+      continue;
+    }
+
     // IP host mapping: 140.205.215.168 domain.com → redirect domain to IP, preserve Host & scheme
     if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(src)) {
       const domain = dst;
@@ -245,6 +275,16 @@ function ruleToWhistle(r) {
     const m = pat.match(/^\^https\?:\/\/(.+?)$/);
     const domain = m ? m[1].replace(/\\\./g, '.').replace(/\[\^\/\]\*/g, '*').replace(/\[\^\.\]\*/g, '*') : pat;
     return domain + ' reqHeaders://(' + headerStr + ')';
+  }
+  if (r.action === 'resHeader' && r.setHeaders) {
+    // resHeader rule → domain resHeaders://(Name: Value)
+    const headerStr = Object.entries(r.setHeaders)
+      .map(([k, v]) => k + ': ' + v)
+      .join('\\n');
+    let pat = r.pattern || '';
+    const m = pat.match(/^\^https\?:\/\/(.+?)$/);
+    const domain = m ? m[1].replace(/\\\./g, '.').replace(/\[\^\/\]\*/g, '*').replace(/\[\^\.\]\*/g, '*') : pat;
+    return domain + ' resHeaders://(' + headerStr + ')';
   }
   if (r.action !== 'redirect') {
     return '# [' + (r.action || 'mock') + '] ' + (r.pattern || '');
@@ -369,7 +409,7 @@ function _renderLog(parent, logEntries) {
     parent.appendChild(noLog);
     return;
   }
-  const ACTION_ICONS = { mock: '\u{1F4E6}', block: '\u{1F6AB}', redirect: '\u21AA', delay: '\u23F1', header: '\u{1F4DD}' };
+  const ACTION_ICONS = { mock: '\u{1F4E6}', block: '\u{1F6AB}', redirect: '\u21AA', delay: '\u23F1', header: '\u{1F4DD}', resHeader: '\u{1F4CB}' };
   logEntries.forEach(e => {
     const row = document.createElement('div');
     row.className = 'log-item';

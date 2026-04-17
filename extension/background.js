@@ -39,6 +39,16 @@ const proxyState     = new Map();   // tabId → { rules: [], log: [] }
 let   globalProxy    = null;        // null | { rules: [], whistleText: '' }
 
 // ── Global Proxy ─────────────────────────────────────────────
+// Determine Fetch interception patterns based on rules.
+// If any rule modifies response headers (resHeader), also intercept at Response stage.
+function getFetchPatterns(rules) {
+  const patterns = [{ urlPattern: "*", requestStage: "Request" }];
+  if (rules && rules.some(r => r.action === 'resHeader')) {
+    patterns.push({ urlPattern: "*", requestStage: "Response" });
+  }
+  return patterns;
+}
+
 async function attachGlobalProxy(tabId) {
   if (!globalProxy) return false;
   if (proxyState.has(tabId)) return true;
@@ -58,7 +68,7 @@ async function attachGlobalProxy(tabId) {
       try { await chrome.debugger.sendCommand({ tabId }, "Security.setIgnoreCertificateErrors", { override: true }); } catch {}
     }
     await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", {
-      patterns: [{ urlPattern: "*", requestStage: "Request" }],
+      patterns: getFetchPatterns(globalProxy.rules),
     });
     console.log(`[globalProxy] attached tab ${tabId}: ${tab.url?.slice(0,60)}`);
     return true;
@@ -89,14 +99,31 @@ async function stopGlobalProxy() {
   }
 }
 
-function updateGlobalRules(rules, whistleText) {
+async function updateGlobalRules(rules, whistleText) {
   if (!globalProxy) return;
+  const oldRules = globalProxy.rules;
   globalProxy.rules = rules;
   if (whistleText !== undefined) globalProxy.whistleText = whistleText;
-  for (const [, st] of proxyState.entries()) {
+
+  // Check if Fetch patterns need updating (resHeader presence changed)
+  const hadResHeader = oldRules.some(r => r.action === 'resHeader');
+  const hasResHeader = rules.some(r => r.action === 'resHeader');
+  const patternsChanged = hadResHeader !== hasResHeader;
+
+  for (const [tabId, st] of proxyState.entries()) {
     if (st._global) {
       st.rules = rules;
       if (whistleText !== undefined) st.whistleText = whistleText;
+      if (patternsChanged) {
+        try {
+          await chrome.debugger.sendCommand({ tabId }, "Fetch.disable");
+          await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", {
+            patterns: getFetchPatterns(rules),
+          });
+        } catch (e) {
+          console.warn(`[globalProxy] re-enable Fetch failed for tab ${tabId}:`, e.message);
+        }
+      }
     }
   }
 }
@@ -414,7 +441,7 @@ const HANDLERS = {
     const rules = cmd.rules || [];
     proxyState.set(tabId, { rules, log: [] });
     await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", {
-      patterns: [{ urlPattern: "*", requestStage: "Request" }],
+      patterns: getFetchPatterns(rules),
     });
     return { ok: true, tabId, ruleCount: rules.length };
   },
@@ -436,7 +463,19 @@ const HANDLERS = {
     const tabId = await resolveTabId(cmd);
     const state = proxyState.get(tabId);
     if (!state) return { error: "Proxy not active on this tab. Start with proxy_start first." };
+    const oldRules = state.rules;
     state.rules = cmd.rules || [];
+    // Re-enable Fetch if resHeader presence changed
+    const hadRes = oldRules.some(r => r.action === 'resHeader');
+    const hasRes = state.rules.some(r => r.action === 'resHeader');
+    if (hadRes !== hasRes) {
+      try {
+        await chrome.debugger.sendCommand({ tabId }, "Fetch.disable");
+        await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", {
+          patterns: getFetchPatterns(state.rules),
+        });
+      } catch {}
+    }
     return { ok: true, ruleCount: state.rules.length };
   },
 
@@ -653,11 +692,54 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   if (method === "Fetch.requestPaused") {
     const url = params.request.url;
 
-    // --- Proxy rules (two-pass: header modifiers + main action) ---
+    // --- Proxy rules ---
     const pState = proxyState.get(tabId);
     if (pState) {
+      // ── Response stage: apply resHeader modifiers ──
+      if (params.responseStatusCode !== undefined) {
+        const resHeaderMods = {};
+        for (const r of pState.rules) {
+          if (r.action !== 'resHeader') continue;
+          let matches;
+          try { matches = new RegExp(r.pattern).test(url); }
+          catch { matches = url.includes(r.pattern); }
+          if (!matches) continue;
+          Object.assign(resHeaderMods, r.setHeaders || {});
+        }
+
+        if (Object.keys(resHeaderMods).length > 0) {
+          // Build modified response headers
+          const headers = [...(params.responseHeaders || [])];
+          for (const [k, v] of Object.entries(resHeaderMods)) {
+            const idx = headers.findIndex(h => h.name.toLowerCase() === k.toLowerCase());
+            if (idx >= 0) headers[idx].value = v;
+            else headers.push({ name: k, value: v });
+          }
+          chrome.debugger.sendCommand({ tabId }, "Fetch.continueResponse", {
+            requestId: params.requestId,
+            responseCode: params.responseStatusCode,
+            responseHeaders: headers,
+          });
+          const logEntry = {
+            url, method: params.request.method, action: 'resHeader',
+            pattern: 'resHeader',
+            detail: `resHeaders: ${Object.keys(resHeaderMods).join(", ")}`,
+            ts: Date.now(),
+          };
+          pState.log.push(logEntry);
+          pushEvent("proxy.hit", tabId, logEntry);
+        } else {
+          // No resHeader match at Response stage, pass through
+          chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", {
+            requestId: params.requestId,
+          });
+        }
+        return;
+      }
+
+      // ── Request stage: header modifiers + main action ──
       // Pass 1: collect header modifiers from all matching 'header' rules
-      // Pass 2: find first matching non-header rule as the "main action"
+      // Pass 2: find first matching non-header/non-resHeader rule as the "main action"
       const headerMods = {};
       let actionRule = null;
 
@@ -669,6 +751,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 
         if ((r.action || "mock") === "header") {
           Object.assign(headerMods, r.setHeaders || {});
+        } else if (r.action === "resHeader") {
+          // Skip — handled at Response stage
         } else if (!actionRule) {
           actionRule = r;
         }
@@ -911,7 +995,7 @@ async function handlePopupMessage(msg) {
     }
     case "proxyUpdateGlobalRules": {
       const rules = msg.rules || [];
-      updateGlobalRules(rules, msg.whistleText);
+      await updateGlobalRules(rules, msg.whistleText);
       send({ _event: true, type: "proxy.global_updated", rules, whistleText: msg.whistleText, ts: Date.now() });
       return { ok: true, ruleCount: rules.length };
     }
