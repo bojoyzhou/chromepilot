@@ -43,14 +43,26 @@ AI Agent ──HTTP──▸ ChromePilot Server ──WebSocket──▸ Chrome 
 
 ## 快速开始
 
-### 1. 安装 Chrome 扩展
+### 一键安装（推荐）
+
+```bash
+bash setup.sh
+```
+
+脚本会自动完成：检查依赖 → 安装 aiohttp → 配置 Server 开机自启 → 引导安装 Chrome 扩展 → 验证连接 → 配置 `cp-pilot` 快捷命令。
+
+卸载同样一条命令：`bash setup.sh --uninstall`
+
+### 手动安装
+
+#### 1. 安装 Chrome 扩展
 
 1. 打开 `chrome://extensions/`
 2. 开启右上角的**开发者模式**
 3. 点击**加载已解压的扩展程序** → 选择 `extension/` 目录
 4. 看到 "ChromePilot" 出现并显示绿色状态即可
 
-### 2. 启动服务
+#### 2. 启动服务
 
 ```bash
 pip install aiohttp
@@ -64,7 +76,7 @@ python3 server.py
 [chromepilot] ✓ Extension connected
 ```
 
-### 3. 开始使用
+#### 3. 开始使用
 
 ```bash
 python3 cp.py status

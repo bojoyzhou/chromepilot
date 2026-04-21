@@ -50,8 +50,16 @@ function getFetchPatterns(rules) {
 }
 
 async function attachGlobalProxy(tabId) {
-  if (!globalProxy) return false;
-  if (proxyState.has(tabId)) return true;
+  if (!globalProxy || globalProxy.paused) return false;
+  // If tab already has global proxy state, update rules to match current globalProxy
+  const existing = proxyState.get(tabId);
+  if (existing && existing._global) {
+    existing.rules = globalProxy.rules;
+    existing.whistleText = globalProxy.whistleText;
+    return true;
+  }
+  // If tab has per-tab proxy, don't override it
+  if (existing) return true;
   try {
     const tab = await chrome.tabs.get(tabId);
     if (tab.url && (tab.url.startsWith("chrome") || tab.url.startsWith("devtools://"))) {
@@ -96,6 +104,43 @@ async function stopGlobalProxy() {
       try { await chrome.debugger.sendCommand({ tabId }, "Fetch.disable"); } catch {}
     }
     if (!debuggerStillNeeded(tabId)) await detachDebugger(tabId);
+  }
+}
+
+async function pauseGlobalProxy() {
+  if (!globalProxy || globalProxy.paused) return;
+  globalProxy.paused = true;
+  // Disable Fetch on all global proxy tabs but keep proxyState entries
+  for (const [tabId, st] of proxyState.entries()) {
+    if (!st._global) continue;
+    st._paused = true;
+    try { await chrome.debugger.sendCommand({ tabId }, "Fetch.disable"); } catch {}
+    if (!debuggerStillNeeded(tabId)) await detachDebugger(tabId);
+  }
+}
+
+async function resumeGlobalProxy() {
+  if (!globalProxy || !globalProxy.paused) return;
+  globalProxy.paused = false;
+  // Re-enable Fetch on existing global tabs, re-attach to new tabs
+  const tabs = await chrome.tabs.query({});
+  for (const t of tabs) {
+    const st = proxyState.get(t.id);
+    if (st && st._global && st._paused) {
+      // Re-attach debugger and Fetch for previously paused tabs
+      if (await ensureDebugger(t.id)) {
+        if (globalProxy.rules.some(r => r.setHost)) {
+          try { await chrome.debugger.sendCommand({ tabId: t.id }, "Security.setIgnoreCertificateErrors", { override: true }); } catch {}
+        }
+        await chrome.debugger.sendCommand({ tabId: t.id }, "Fetch.enable", {
+          patterns: getFetchPatterns(globalProxy.rules),
+        });
+        st._paused = false;
+      }
+    } else if (!proxyState.has(t.id)) {
+      // New tabs opened during pause
+      await attachGlobalProxy(t.id);
+    }
   }
 }
 
@@ -513,6 +558,16 @@ const HANDLERS = {
     return { ok: true };
   },
 
+  async proxy_pause_global() {
+    await pauseGlobalProxy();
+    return { ok: true };
+  },
+
+  async proxy_resume_global() {
+    await resumeGlobalProxy();
+    return { ok: true };
+  },
+
   // -- Console --
   async console_start(cmd) {
     const tabId = await resolveTabId(cmd);
@@ -697,6 +752,20 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     if (pState) {
       // ── Response stage: apply resHeader modifiers ──
       if (params.responseStatusCode !== undefined) {
+        // Check disable rules first — skip resHeader if disabled
+        for (const r of pState.rules) {
+          if (r.action !== 'disable') continue;
+          let matches;
+          try { matches = new RegExp(r.pattern).test(url); }
+          catch { matches = url.includes(r.pattern); }
+          if (matches) {
+            chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", {
+              requestId: params.requestId,
+            });
+            return;
+          }
+        }
+
         const resHeaderMods = {};
         for (const r of pState.rules) {
           if (r.action !== 'resHeader') continue;
@@ -708,6 +777,34 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
         }
 
         if (Object.keys(resHeaderMods).length > 0) {
+          // Smart CORS: replace Access-Control-Allow-Origin: * with actual origin
+          // Modern browsers reject wildcard (*) when credentials (cookies) are included
+          const acaoKey = Object.keys(resHeaderMods).find(k => k.toLowerCase() === 'access-control-allow-origin');
+          if (acaoKey && resHeaderMods[acaoKey] === '*') {
+            // Extract origin from request headers (case-insensitive)
+            const reqHeaders = params.request.headers || {};
+            let origin = '';
+            for (const [hk, hv] of Object.entries(reqHeaders)) {
+              if (hk.toLowerCase() === 'origin') { origin = hv; break; }
+            }
+            // Fallback: derive from Referer header
+            if (!origin) {
+              for (const [hk, hv] of Object.entries(reqHeaders)) {
+                if (hk.toLowerCase() === 'referer') {
+                  try { const u = new URL(hv); origin = u.origin; } catch {}
+                  break;
+                }
+              }
+            }
+            if (origin && origin !== 'null') {
+              resHeaderMods[acaoKey] = origin;
+              // Also ensure Access-Control-Allow-Credentials is set
+              if (!Object.keys(resHeaderMods).find(k => k.toLowerCase() === 'access-control-allow-credentials')) {
+                resHeaderMods['Access-Control-Allow-Credentials'] = 'true';
+              }
+            }
+          }
+
           // Build modified response headers
           const headers = [...(params.responseHeaders || [])];
           for (const [k, v] of Object.entries(resHeaderMods)) {
@@ -737,7 +834,21 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
         return;
       }
 
-      // ── Request stage: header modifiers + main action ──
+      // ── Request stage: disable → header modifiers → main action ──
+      // Pass 0: check for 'disable' rules — if matched, pass through immediately
+      for (const r of pState.rules) {
+        if (r.action !== 'disable') continue;
+        let matches;
+        try { matches = new RegExp(r.pattern).test(url); }
+        catch { matches = url.includes(r.pattern); }
+        if (matches) {
+          chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", {
+            requestId: params.requestId,
+          });
+          return;  // bypass all proxy rules for this request
+        }
+      }
+
       // Pass 1: collect header modifiers from all matching 'header' rules
       // Pass 2: find first matching non-header/non-resHeader rule as the "main action"
       const headerMods = {};
@@ -799,10 +910,18 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
           } catch {}
 
           if (rule.setHost) {
-            // IP host mapping: proxy through server.py with correct TLS SNI
+            // Host mapping: proxy through server.py with correct TLS SNI
+            // Target can be IP address or hostname (host:// rules)
             const ipMatch = targetUrl.match(/(\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?)/);
-            const ip = ipMatch ? ipMatch[1] : null;
-            if (ip) {
+            let proxyTarget = ipMatch ? ipMatch[1] : null;
+            if (!proxyTarget) {
+              // Not an IP — extract hostname from target URL for host:// rules
+              try {
+                const u = new URL(targetUrl);
+                if (u.hostname !== rule.setHost) proxyTarget = u.hostname;
+              } catch {}
+            }
+            if (proxyTarget) {
               // Merge headerMods into the request headers sent to server
               const mergedHeaders = { ...params.request.headers, ...headerMods };
               (async () => {
@@ -811,9 +930,10 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      url, ip, host: rule.setHost,
+                      url, ip: proxyTarget, host: rule.setHost,
                       method: params.request.method,
                       headers: mergedHeaders,
+                      postData: params.request.postData || undefined,
                     }),
                   });
                   const data = await resp.json();
@@ -828,13 +948,13 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
                     body: data.body || "",
                   });
                 } catch (e) {
-                  console.error(`[proxy] IP fetch failed for ${url}:`, e.message);
+                  console.error(`[proxy] host mapping fetch failed for ${url}:`, e.message);
                   chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", {
                     requestId: params.requestId,
                   });
                 }
               })();
-              logEntry.detail = `⇄ ${rule.setHost} → ${ip}`;
+              logEntry.detail = `⇄ ${rule.setHost} → ${proxyTarget}`;
             } else {
               const cmd = { requestId: params.requestId, url: targetUrl };
               if (hasHeaderMods) cmd.headers = buildHeaders(params.request.headers);
@@ -982,6 +1102,16 @@ async function handlePopupMessage(msg) {
       send({ _event: true, type: "proxy.rules_updated", tabId: msg.tabId, rules: msg.rules, whistleText: msg.whistleText, ts: Date.now() });
       return result;
     }
+    case "proxyStartTab": {
+      const rules = msg.rules || [];
+      const result = await HANDLERS.proxy_start({ tabId: msg.tabId, rules });
+      const pState = proxyState.get(msg.tabId);
+      if (pState && msg.whistleText !== undefined) {
+        pState.whistleText = msg.whistleText;
+      }
+      send({ _event: true, type: "proxy.rules_updated", tabId: msg.tabId, rules, whistleText: msg.whistleText, ts: Date.now() });
+      return result;
+    }
     case "proxyStartGlobal": {
       const rules = msg.rules || [];
       const n = await startGlobalProxy(rules, msg.whistleText);
@@ -1003,6 +1133,16 @@ async function handlePopupMessage(msg) {
       for (const [, st] of proxyState.entries()) {
         if (st._global) st.log = [];
       }
+      return { ok: true };
+    }
+    case "proxyPauseGlobal": {
+      await pauseGlobalProxy();
+      send({ _event: true, type: "proxy.global_paused", ts: Date.now() });
+      return { ok: true };
+    }
+    case "proxyResumeGlobal": {
+      await resumeGlobalProxy();
+      send({ _event: true, type: "proxy.global_resumed", ts: Date.now() });
       return { ok: true };
     }
     default:
@@ -1034,7 +1174,7 @@ async function buildPopupState() {
       },
       networkCount: (networkBuffers.get(tabId) || []).length,
       consoleCount: (consoleBuffers.get(tabId) || []).length,
-      proxy: pState ? { rules: pState.rules, log: pState.log, whistleText: pState.whistleText } : null,
+      proxy: pState ? { rules: pState.rules, log: pState.log, whistleText: pState.whistleText, _global: !!pState._global } : null,
     });
   }
 
@@ -1052,6 +1192,7 @@ async function buildPopupState() {
   if (globalProxy) {
     globalProxyState = {
       active: true,
+      paused: !!globalProxy.paused,
       rules: globalProxy.rules,
       whistleText: globalProxy.whistleText || '',
       tabCount: [...proxyState.entries()].filter(([, st]) => st._global).length,

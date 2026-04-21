@@ -107,6 +107,13 @@ async def _replay_proxy_rules():
                 if "error" not in result:
                     tab_count = result.get("tabCount", 0)
                     print(f"[chromepilot] \u21BB Restored global proxy ({len(rules)} rules, {tab_count} tabs)")
+                    # If proxy was paused before, pause it again
+                    if data.get("paused"):
+                        try:
+                            await _send({"action": "proxy_pause_global"}, timeout=5)
+                            print(f"[chromepilot] \u23F8 Global proxy restored in paused state")
+                        except Exception:
+                            pass
                 else:
                     print(f"[chromepilot] \u26A0 Global proxy restore failed: {result['error']}")
             except Exception as e:
@@ -196,6 +203,19 @@ async def ws_handler(request):
                         del proxy_store["_global"]
                         _save_proxy_rules()
                     print(f"[chromepilot] \u2717 Global proxy stopped")
+
+                # Handle global proxy paused/resumed
+                if evt_type == "proxy.global_paused":
+                    if "_global" in proxy_store:
+                        proxy_store["_global"]["paused"] = True
+                        _save_proxy_rules()
+                    print(f"[chromepilot] \u23F8 Global proxy paused")
+
+                if evt_type == "proxy.global_resumed":
+                    if "_global" in proxy_store:
+                        proxy_store["_global"].pop("paused", None)
+                        _save_proxy_rules()
+                    print(f"[chromepilot] \u25B6 Global proxy resumed")
 
                 # Fan out to SSE clients
                 for queue, types in sse_clients:
@@ -503,13 +523,22 @@ async def handle_proxy_stop_global(request):
 
 # Proxy Fetch — forward request via server with custom DNS (correct TLS SNI)
 class _IPResolver(aiohttp.abc.AbstractResolver):
-    """Resolve a specific hostname to a given IP, passthrough for others."""
-    def __init__(self, host, ip):
+    """Resolve a specific hostname to a given IP or hostname, passthrough for others."""
+    def __init__(self, host, target):
         self._host = host
-        self._ip = ip
+        self._target = target
 
     async def resolve(self, host, port=0, family=socket.AF_INET):
-        target = self._ip if host == self._host else host
+        target = self._target if host == self._host else host
+        # If target is a hostname (not an IP address), resolve it first
+        try:
+            socket.inet_aton(target)
+        except OSError:
+            # Not a valid IPv4 address — resolve as hostname
+            loop = asyncio.get_running_loop()
+            infos = await loop.getaddrinfo(target, port, family=family, type=socket.SOCK_STREAM)
+            if infos:
+                target = infos[0][4][0]
         return [{
             "hostname": host, "host": target, "port": port,
             "family": family, "proto": 0, "flags": 0,
@@ -531,6 +560,7 @@ async def handle_proxy_fetch(request):
     host = body.get("host", "")
     method = body.get("method", "GET")
     req_headers = body.get("headers", {})
+    post_data = body.get("postData")  # Forward request body for POST/PUT/PATCH
 
     if not original_url or not ip or not host:
         return web.json_response({"error": "url, ip, host required"}, status=400)
@@ -553,6 +583,7 @@ async def handle_proxy_fetch(request):
             async with session.request(
                 method, original_url,
                 headers=clean_headers,
+                data=post_data.encode("utf-8") if post_data else None,
                 allow_redirects=False,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:

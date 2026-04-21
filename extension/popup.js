@@ -9,6 +9,7 @@ let _refreshTimer = null;
 let _selectedTabId = null;
 let _lastStateHash = '';
 let _editingWhistle = null;  // whistle text in edit mode, null = view mode
+let _editingPerTabWhistle = null;  // per-tab whistle text in edit mode
 
 function registerModule(mod) {
   // mod: { id, label, icon, badge?(), init?(), render(container, state), destroy?() }
@@ -139,6 +140,12 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n) + '...' : s;
 }
 
+function ruleMatchesUrl(rule, url) {
+  if (!url || !rule.pattern) return false;
+  try { return new RegExp(rule.pattern).test(url); }
+  catch { return url.includes(rule.pattern); }
+}
+
 function timeAgo(ts) {
   if (!ts) return '';
   const diff = Math.max(0, Math.floor((Date.now() - ts) / 1000));
@@ -159,15 +166,50 @@ function parseWhistleRules(text) {
 
     const parts = line.split(/\s+/);
     if (parts.length < 2) continue;
-    const [src, dst] = parts;
+    const src = parts[0];
+    const dst = parts[1];
 
-    // Skip unsupported: host://
-    if (src.startsWith('host://')) continue;
+    // host:// — multi-domain host mapping: host://target_host domain1 domain2 ...
+    // Redirects all listed domains through target_host, preserving original Host header
+    if (src.startsWith('host://')) {
+      const targetHost = src.slice('host://'.length);
+      if (!targetHost) continue;
+      for (let i = 1; i < parts.length; i++) {
+        const domain = parts[i];
+        if (!domain) continue;
+        const escapedDomain = domain.replace(/\./g, '\\.');
+        rules.push({
+          pattern: '^(https?)://' + escapedDomain + '(.*)$',
+          action: 'redirect',
+          target: '$1://' + targetHost + '$2',
+          setHost: domain,
+        });
+      }
+      continue;
+    }
+
+    // disable:// — bypass proxy for matching URLs (pass through without any modification)
+    if (dst === 'disable://' || dst.startsWith('disable://')) {
+      let pattern;
+      if (src.startsWith('^')) {
+        const domain = src.slice(1);
+        const escaped = domain.replace(/\./g, '\\.').replace(/\*\*\*/g, '(.*)').replace(/\*/g, '[^/]*');
+        pattern = '^https?://' + escaped;
+      } else if (src.startsWith('http://') || src.startsWith('https://')) {
+        pattern = '^' + src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      } else {
+        const escaped = src.replace(/\./g, '\\.').replace(/\*/g, '[^.]*');
+        pattern = '^https?://' + escaped;
+      }
+      rules.push({ pattern, action: 'disable' });
+      continue;
+    }
 
     // reqHeaders:// as target — add custom request headers
     // Syntax: pattern reqHeaders://(Header: Value) or reqHeaders://Header:Value
+    // Note: header values may contain spaces, so rejoin parts after the source pattern
     if (dst.startsWith('reqHeaders://')) {
-      let headerContent = dst.slice('reqHeaders://'.length);
+      let headerContent = parts.slice(1).join(' ').slice('reqHeaders://'.length);
       // Strip optional parentheses
       if (headerContent.startsWith('(') && headerContent.endsWith(')')) {
         headerContent = headerContent.slice(1, -1);
@@ -200,8 +242,9 @@ function parseWhistleRules(text) {
 
     // resHeaders:// as target — modify response headers (e.g. CORS)
     // Syntax: pattern resHeaders://(Header: Value) or resHeaders://Header:Value
+    // Note: header values may contain spaces, so rejoin parts after the source pattern
     if (dst.startsWith('resHeaders://')) {
-      let headerContent = dst.slice('resHeaders://'.length);
+      let headerContent = parts.slice(1).join(' ').slice('resHeaders://'.length);
       if (headerContent.startsWith('(') && headerContent.endsWith(')')) {
         headerContent = headerContent.slice(1, -1);
       }
@@ -265,6 +308,12 @@ function parseWhistleRules(text) {
 }
 
 function ruleToWhistle(r) {
+  if (r.action === 'disable') {
+    let pat = r.pattern || '';
+    const m = pat.match(/^\^https\?:\/\/(.+?)$/);
+    const domain = m ? m[1].replace(/\\\./g, '.').replace(/\[\^\/\]\*/g, '*').replace(/\[\^\.\]\*/g, '*') : pat;
+    return domain + ' disable://';
+  }
   if (r.action === 'header' && r.setHeaders) {
     // header rule → domain reqHeaders://(Name: Value)
     const headerStr = Object.entries(r.setHeaders)
@@ -298,6 +347,11 @@ function ruleToWhistle(r) {
     if (ipMatch) {
       return ipMatch[1] + ' ' + r.setHost;
     }
+    // Hostname host mapping: host://target_host domain
+    const hostMatch = target.match(/^\$1:\/\/([^$]+)\$2$/);
+    if (hostMatch) {
+      return 'host://' + hostMatch[1] + ' ' + r.setHost;
+    }
   }
 
   // ^https?://host\.path/(.*)$ → ^host.path/***
@@ -317,50 +371,79 @@ function ruleToWhistle(r) {
 }
 
 function rulesToWhistle(rules) {
-  return rules.map(ruleToWhistle).join('\n');
+  // Group host:// rules: redirect + setHost where target is a hostname (not IP)
+  const hostGroups = {};  // targetHost → [domain1, domain2, ...]
+  const otherRules = [];
+  for (const r of rules) {
+    if (r.action === 'redirect' && r.setHost) {
+      const tm = (r.target || '').match(/^\$1:\/\/([^$]+)\$2$/);
+      if (tm) {
+        const targetHost = tm[1];
+        if (!/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(targetHost)) {
+          if (!hostGroups[targetHost]) hostGroups[targetHost] = [];
+          hostGroups[targetHost].push(r.setHost);
+          continue;
+        }
+      }
+    }
+    otherRules.push(r);
+  }
+  const lines = [];
+  for (const [target, domains] of Object.entries(hostGroups)) {
+    lines.push('host://' + target + ' ' + domains.join(' '));
+  }
+  lines.push(...otherRules.map(ruleToWhistle));
+  return lines.join('\n');
 }
 
 // ─────────────────────────────────────────────────────────
 // Proxy Render Helpers
 // ─────────────────────────────────────────────────────────
-function _renderWhistleEditor(parent, onSave, saveLabel) {
+function _renderWhistleEditor(parent, onSave, saveLabel, stateAccessor) {
+  const acc = stateAccessor || {
+    get() { return _editingWhistle; },
+    set(v) { _editingWhistle = v; },
+    reset() { _editingWhistle = null; }
+  };
+
   const panel = document.createElement('div');
   panel.className = 'rule-detail-panel';
 
   const textarea = document.createElement('textarea');
   textarea.className = 'rule-editor';
-  textarea.value = _editingWhistle || '';
+  textarea.value = acc.get() || '';
   textarea.spellcheck = false;
-  textarea.placeholder = '# Whistle 格式，每行一条规则\n^domain.com/*** http://target/$1\nhttps://source.com https://target.com';
-  textarea.style.height = Math.min(340, Math.max(160, (_editingWhistle || '').split('\n').length * 17 + 16)) + 'px';
-  textarea.oninput = () => { _editingWhistle = textarea.value; };
+  textarea.placeholder = '# Whistle 格式，每行一条规则\n^domain.com/*** http://target/$1\nhttps://source.com https://target.com\nhost://target.host domain1 domain2';
+  textarea.style.height = Math.min(340, Math.max(160, (acc.get() || '').split('\n').length * 17 + 16)) + 'px';
+  textarea.oninput = () => { acc.set(textarea.value); };
   textarea.onkeydown = (e) => {
     if (e.key === 'Tab') {
       e.preventDefault();
       const s = textarea.selectionStart, end = textarea.selectionEnd;
       textarea.value = textarea.value.substring(0, s) + '  ' + textarea.value.substring(end);
       textarea.selectionStart = textarea.selectionEnd = s + 2;
-      _editingWhistle = textarea.value;
+      acc.set(textarea.value);
     }
   };
   panel.appendChild(textarea);
 
   const hint = document.createElement('div');
   hint.className = 'rule-editor-hint';
-  hint.textContent = '# 注释  ^domain/*** target/$1  https://src https://dst';
+  hint.textContent = '# 注释  ^domain/*** target/$1  https://src https://dst  host://target domain';
 
   const actionsRow = document.createElement('div');
   actionsRow.className = 'rule-editor-actions';
 
-  const btnCancel = createBtn('取消', 'btn', () => { _editingWhistle = null; refreshUI(); });
+  const btnCancel = createBtn('取消', 'btn', () => { acc.reset(); refreshUI(); });
   const btnSave = createBtn(saveLabel || '保存', 'btn btn-primary', async () => {
     try {
-      const newRules = parseWhistleRules(_editingWhistle);
-      if (newRules.length === 0 && _editingWhistle.trim().replace(/^#.*$/gm, '').trim()) {
+      const currentText = acc.get();
+      const newRules = parseWhistleRules(currentText);
+      if (newRules.length === 0 && currentText.trim().replace(/^#.*$/gm, '').trim()) {
         throw new Error('没有解析出有效规则，请检查格式');
       }
-      await onSave(_editingWhistle, newRules);
-      _editingWhistle = null;
+      await onSave(currentText, newRules);
+      acc.reset();
       fetchState();
     } catch (err) {
       hint.textContent = '错误: ' + err.message;
@@ -481,7 +564,7 @@ registerModule({
         idSpan.style.color = 'var(--green)';
         const titleSpan = document.createElement('span');
         titleSpan.className = 'feature-tab-title';
-        titleSpan.textContent = '全局代理 · ' + (state.globalProxy.rules?.length || 0) + ' 条规则';
+        titleSpan.textContent = '全局代理 · ' + (state.globalProxy.rules?.length || 0) + ' 条规则' + (state.globalProxy.paused ? ' (已暂停)' : '');
         const pills = document.createElement('span');
         pills.className = 'feature-pills';
         const p = document.createElement('span');
@@ -586,7 +669,7 @@ registerModule({
 });
 
 // ─────────────────────────────────────────────────────────
-// Module: Proxy (Global Mode)
+// Module: Proxy (Global + Per-Tab + Active Tab View)
 // ─────────────────────────────────────────────────────────
 registerModule({
   id: 'proxy',
@@ -600,26 +683,234 @@ registerModule({
 
   render(container, state) {
     const gp = state.globalProxy;
+    const activeTab = state.browserTabs?.find(t => t.active);
+    const perTabAcc = {
+      get() { return _editingPerTabWhistle; },
+      set(v) { _editingPerTabWhistle = v; },
+      reset() { _editingPerTabWhistle = null; }
+    };
 
+    // ── Active Tab Effective Rules ──────────────────────
+    if (activeTab && activeTab.url && !activeTab.url.startsWith('chrome') && !activeTab.url.startsWith('about:')) {
+      const url = activeTab.url;
+
+      // Collect matching global rules
+      const globalRules = (gp?.active && !gp?.paused) ? (gp.rules || []) : [];
+      const matchingGlobal = globalRules.filter(r => ruleMatchesUrl(r, url));
+
+      // Collect matching per-tab rules
+      const tabEntry = state.tabs?.find(t => t.tabId === activeTab.tabId);
+      const perTabProxy = tabEntry?.proxy;
+      const isPerTab = perTabProxy && !perTabProxy._global;
+      const perTabRules = isPerTab ? (perTabProxy.rules || []) : [];
+      const matchingPerTab = perTabRules.filter(r => ruleMatchesUrl(r, url));
+
+      const totalMatching = matchingGlobal.length + matchingPerTab.length;
+
+      let displayUrl;
+      try { const u = new URL(url); displayUrl = u.hostname + u.pathname; }
+      catch { displayUrl = url; }
+      if (displayUrl.length > 55) displayUrl = displayUrl.slice(0, 55) + '...';
+
+      const card = createCard('当前标签页', totalMatching ? totalMatching + ' 条生效' : '');
+
+      // Tab URL row
+      const urlRow = document.createElement('div');
+      urlRow.style.cssText = 'display:flex;align-items:center;gap:6px;padding:2px 0 8px;border-bottom:1px solid var(--bg);margin-bottom:6px';
+      const urlText = document.createElement('span');
+      urlText.style.cssText = 'font-size:12px;color:var(--text);font-family:"SF Mono",Monaco,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      urlText.textContent = '\uD83C\uDF10 ' + displayUrl;
+      urlText.title = url;
+      urlRow.appendChild(urlText);
+      card.appendChild(urlRow);
+
+      if (totalMatching === 0) {
+        const noMatch = document.createElement('div');
+        noMatch.style.cssText = 'color:var(--text3);font-size:12px;padding:4px 0';
+        noMatch.textContent = '无匹配的代理规则';
+        card.appendChild(noMatch);
+      } else {
+        // Show matching rules with source tags
+        const allMatching = [
+          ...matchingGlobal.map(r => ({ rule: r, source: '全局' })),
+          ...matchingPerTab.map(r => ({ rule: r, source: '标签' })),
+        ];
+        allMatching.forEach(({ rule, source }) => {
+          const row = document.createElement('div');
+          row.className = 'rule-item';
+          row.style.cursor = 'default';
+
+          const actionSpan = document.createElement('span');
+          actionSpan.className = 'rule-action action-' + (rule.action || 'mock');
+          actionSpan.textContent = rule.action || 'mock';
+
+          const sourceSpan = document.createElement('span');
+          sourceSpan.style.cssText = 'font-size:10px;padding:1px 5px;border-radius:3px;font-weight:500;flex-shrink:0;' +
+            (source === '全局'
+              ? 'background:#dbeafe;color:#1d4ed8'
+              : 'background:#fef3c7;color:#92400e');
+          sourceSpan.textContent = source;
+
+          const textSpan = document.createElement('span');
+          textSpan.className = 'rule-pattern';
+          const wt = ruleToWhistle(rule);
+          textSpan.textContent = wt;
+          textSpan.title = wt;
+
+          row.append(actionSpan, sourceSpan, textSpan);
+          card.appendChild(row);
+        });
+      }
+
+      // Quick add per-tab rule button
+      if (!isPerTab && _editingPerTabWhistle === null) {
+        const addBtn = createBtn('+ 添加标签页规则', 'btn', () => {
+          _editingPerTabWhistle = '';
+          refreshUI();
+        });
+        addBtn.style.cssText = 'margin-top:8px;font-size:11px';
+        card.appendChild(addBtn);
+      }
+
+      container.appendChild(card);
+
+      // ── Per-Tab Proxy Rules (for active tab) ──────────
+      if (_editingPerTabWhistle !== null || isPerTab) {
+        const ptCard = createCard('标签页代理 #' + activeTab.tabId, isPerTab ? (perTabRules.length || 0) + ' 条规则' : '新建');
+
+        if (_editingPerTabWhistle !== null) {
+          _renderWhistleEditor(ptCard, async (text, rules) => {
+            if (isPerTab) {
+              await chrome.runtime.sendMessage({
+                type: 'proxyUpdateRules', tabId: activeTab.tabId,
+                rules, whistleText: text
+              });
+            } else {
+              await chrome.runtime.sendMessage({
+                type: 'proxyStartTab', tabId: activeTab.tabId,
+                rules, whistleText: text
+              });
+            }
+            _editingPerTabWhistle = null;
+          }, isPerTab ? '保存' : '启动标签页代理', perTabAcc);
+        } else {
+          const ptWhistle = perTabProxy.whistleText || rulesToWhistle(perTabRules);
+          const editBtn = createBtn('编辑', 'btn', () => {
+            _editingPerTabWhistle = ptWhistle;
+            refreshUI();
+          });
+          editBtn.style.cssText = 'padding:2px 8px;font-size:10.5px';
+          ptCard.querySelector('.card-header').appendChild(editBtn);
+
+          _renderRuleList(ptCard, perTabRules);
+
+          // Per-tab log
+          const ptLog = perTabProxy.log || [];
+          if (ptLog.length > 0) {
+            const logSec = document.createElement('div');
+            logSec.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid var(--bg)';
+            const logTitle = document.createElement('div');
+            logTitle.style.cssText = 'font-size:11px;color:var(--text3);margin-bottom:4px';
+            logTitle.textContent = '命中日志 \u00B7 ' + ptLog.length + ' 次';
+            logSec.appendChild(logTitle);
+            _renderLog(logSec, ptLog.slice(-10).reverse());
+            ptCard.appendChild(logSec);
+          }
+
+          // Per-tab controls
+          const ptBtnRow = document.createElement('div');
+          ptBtnRow.className = 'btn-row';
+          ptBtnRow.append(
+            createBtn('清空日志', 'btn', async () => {
+              await chrome.runtime.sendMessage({ type: 'proxyClearLog', tabId: activeTab.tabId });
+              fetchState();
+            }),
+            createBtn('停止', 'btn btn-danger', async () => {
+              await chrome.runtime.sendMessage({ type: 'proxyStop', tabId: activeTab.tabId });
+              fetchState();
+            })
+          );
+          ptCard.appendChild(ptBtnRow);
+        }
+        container.appendChild(ptCard);
+      }
+    }
+
+    // ── Other Per-Tab Proxies ───────────────────────────
+    const otherPerTab = (state.tabs || []).filter(t =>
+      t.proxy && !t.proxy._global && t.tabId !== activeTab?.tabId
+    );
+    if (otherPerTab.length > 0) {
+      const otherCard = createCard('其他标签页代理', otherPerTab.length + ' 个');
+      otherPerTab.forEach(entry => {
+        const bt = state.browserTabs?.find(b => b.tabId === entry.tabId);
+        const row = document.createElement('div');
+        row.className = 'feature-row';
+
+        const idSpan = document.createElement('span');
+        idSpan.className = 'feature-tab-id';
+        idSpan.textContent = '#' + entry.tabId;
+
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'feature-tab-title';
+        titleSpan.textContent = bt?.title || 'Tab';
+        titleSpan.title = bt?.url || '';
+
+        const countSpan = document.createElement('span');
+        countSpan.style.cssText = 'font-size:11px;color:var(--text3)';
+        countSpan.textContent = (entry.proxy.rules?.length || 0) + ' 条规则';
+
+        row.append(idSpan, titleSpan, countSpan);
+        otherCard.appendChild(row);
+      });
+      container.appendChild(otherCard);
+    }
+
+    // ── Global Proxy Section ───────────────────────────
     if (gp && gp.active) {
       // ── Global proxy active ──────────────────────────
+      const isPaused = !!gp.paused;
 
-      // Status card
+      // Status card with toggle
       const statusCard = createCard('全局代理', gp.tabCount + ' 个标签页');
-      const statusDiv = document.createElement('div');
-      statusDiv.style.cssText = 'display:flex;align-items:center;gap:8px;padding:2px 0';
+
+      const statusRow = document.createElement('div');
+      statusRow.style.cssText = 'display:flex;align-items:center;gap:10px;padding:2px 0';
+
+      // Toggle switch
+      const toggle = document.createElement('label');
+      toggle.className = 'toggle';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = !isPaused;
+      checkbox.onchange = async () => {
+        checkbox.disabled = true;
+        if (checkbox.checked) {
+          await chrome.runtime.sendMessage({ type: 'proxyResumeGlobal' });
+        } else {
+          await chrome.runtime.sendMessage({ type: 'proxyPauseGlobal' });
+        }
+        fetchState();
+      };
+      const slider = document.createElement('span');
+      slider.className = 'toggle-slider';
+      toggle.append(checkbox, slider);
+
       const dot = document.createElement('div');
-      dot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:var(--green);flex-shrink:0';
+      dot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:' + (isPaused ? 'var(--orange)' : 'var(--green)') + ';flex-shrink:0';
       const statusText = document.createElement('span');
-      statusText.style.cssText = 'font-size:12px;color:var(--text2)';
-      statusText.textContent = '运行中 \u00B7 ' + (gp.rules?.length || 0) + ' 条规则 \u00B7 ' + (gp.tabCount || 0) + ' 个标签页';
-      statusDiv.append(dot, statusText);
-      statusCard.appendChild(statusDiv);
+      statusText.style.cssText = 'font-size:12px;color:var(--text2);flex:1';
+      statusText.textContent = isPaused
+        ? '已暂停 \u00B7 ' + (gp.rules?.length || 0) + ' 条规则'
+        : '运行中 \u00B7 ' + (gp.rules?.length || 0) + ' 条规则 \u00B7 ' + (gp.tabCount || 0) + ' 个标签页';
+
+      statusRow.append(toggle, dot, statusText);
+      statusCard.appendChild(statusRow);
       container.appendChild(statusCard);
 
       // Rules card
       const whistleText = gp.whistleText || rulesToWhistle(gp.rules || []);
-      const rulesCard = createCard('规则', (gp.rules?.length || 0) + ' 条');
+      const rulesCard = createCard('全局规则', (gp.rules?.length || 0) + ' 条');
 
       const editBtn = createBtn(_editingWhistle !== null ? '收起' : '编辑', 'btn', () => {
         _editingWhistle = _editingWhistle !== null ? null : whistleText;
@@ -643,7 +934,7 @@ registerModule({
       // Log card
       const log = gp.log || [];
       const recentLog = log.slice(0, 30);
-      const logCard = createCard('命中日志', log.length + ' 次');
+      const logCard = createCard('全局命中日志', log.length + ' 次');
       _renderLog(logCard, recentLog);
       container.appendChild(logCard);
 

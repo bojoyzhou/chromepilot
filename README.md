@@ -43,14 +43,26 @@ This matters because the most valuable browser automation scenarios involve **au
 
 ## Quick Start
 
-### 1. Install the Chrome Extension
+### One-Line Setup (Recommended)
+
+```bash
+bash setup.sh
+```
+
+The script automatically: checks dependencies → installs aiohttp → configures server auto-start → guides Chrome extension installation → verifies connection → sets up `cp-pilot` shortcut.
+
+Uninstall: `bash setup.sh --uninstall`
+
+### Manual Setup
+
+#### 1. Install the Chrome Extension
 
 1. Open `chrome://extensions/`
 2. Enable **Developer mode** (top right)
 3. Click **Load unpacked** → select the `extension/` directory
 4. You should see "ChromePilot" appear with a green status
 
-### 2. Start the Server
+#### 2. Start the Server
 
 ```bash
 pip install aiohttp
@@ -64,7 +76,7 @@ python3 server.py
 [chromepilot] ✓ Extension connected
 ```
 
-### 3. Start Using It
+#### 3. Start Using It
 
 ```bash
 python3 cp.py status
