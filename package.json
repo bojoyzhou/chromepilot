@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:related": "vitest related --run --passWithNoTests",
+    "precommit:version-build": "node scripts/precommit-version-build.mjs",
     "lint-staged": "lint-staged",
     "prepare": "husky"
   },
@@ -29,12 +30,17 @@
   ],
   "license": "MIT",
   "lint-staged": {
-    "*.{ts,tsx}": [
+    "src/**/*.{ts,tsx}": [
       "eslint --fix",
       "prettier --write",
       "npm run test:related --"
     ],
-    "*.{js,mjs,cjs,json,css,html,md}": [
+    "tests/**/*.ts": [
+      "eslint --fix",
+      "prettier --write",
+      "npm run test:related --"
+    ],
+    "{*.{js,mjs,cjs,json,ts},src/**/*.css,src/**/*.html,README*.md}": [
       "prettier --write"
     ]
   },
