@@ -6,3 +6,8 @@ __pycache__/
 
 # User-specific proxy rules (generated at runtime)
 proxy-rules.json
+
+# Node / Vite build outputs
+node_modules/
+dist/
+coverage/

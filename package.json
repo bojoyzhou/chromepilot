@@ -1,0 +1,58 @@
+{
+  "name": "chromepilot",
+  "version": "2.0.0",
+  "description": "ChromePilot extension build tooling",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"tests/**/*.ts\"",
+    "lint:fix": "npm run lint -- --fix",
+    "format": "prettier --write \"{src,tests}/**/*.ts\" \"src/**/*.html\" \"src/**/*.css\" \"*.{js,json,ts}\"",
+    "format:check": "prettier --check \"{src,tests}/**/*.ts\" \"src/**/*.html\" \"src/**/*.css\" \"*.{js,json,ts}\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:related": "vitest related --run --passWithNoTests",
+    "lint-staged": "lint-staged",
+    "prepare": "husky"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@gitlab.alibaba-inc.com:aone-open-skill/chromepilot.git"
+  },
+  "keywords": [
+    "chrome-extension",
+    "vite",
+    "typescript"
+  ],
+  "license": "MIT",
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write",
+      "npm run test:related --"
+    ],
+    "*.{js,mjs,cjs,json,css,html,md}": [
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.4.0",
+    "@eslint/js": "^9.39.4",
+    "@types/chrome": "^0.1.40",
+    "@typescript-eslint/eslint-plugin": "^8.59.0",
+    "@typescript-eslint/parser": "^8.59.0",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.5.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.0",
+    "vite": "^7.3.2",
+    "vitest": "^3.2.4"
+  }
+}
