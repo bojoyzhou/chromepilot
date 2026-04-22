@@ -60,7 +60,7 @@ When using ChromePilot capabilities, the agent MUST format responses following t
 | Proxy hit log | Markdown table | Timestamp (relative), URL path, Action taken, Header mods |
 | `cp cookie list` | Markdown table | Name, Domain, Value (\*\*\*masked), Secure, HttpOnly, Expires |
 | `cp console` | Grouped by level, newest first | Level icon, Timestamp, Message text |
-| `cp screenshot` | `[View screenshot](file://path)` + dimensions | File link; mention format and size |
+| `cp screenshot` | `[View screenshot](file://path)` + dimensions | File link; save to workspace/output dir, not cwd |
 | `cp page` | Key metrics in natural prose | URL, title, readyState, load timing, storage key count |
 | `cp storage` | Single value → inline; list → markdown table | Key, Value (JSON formatted if applicable) |
 
@@ -188,7 +188,7 @@ cp cookie list [--domain .example.com]                   # List/filter cookies
 cp cookie set --url URL --name N --value V [--secure]    # Set cookie
 cp cookie delete --url URL --name N                      # Delete cookie
 
-cp screenshot [output.png]           # Capture screenshot
+cp screenshot [path/to/output.png]   # Capture screenshot; path should be an absolute path under the agent's workspace or output directory — never save directly to cwd
 cp page [--url mysite]               # URL, title, timing, storage key count
 
 cp storage list [--session]          # List localStorage/sessionStorage keys
