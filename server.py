@@ -717,12 +717,13 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="ChromePilot Server")
     parser.add_argument("--port", type=int, default=8787, help="Server port (default: 8787)")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     args = parser.parse_args()
 
     lan_ip = _get_lan_ip()
     _load_proxy_rules()
+    display_host = lan_ip if args.host == "0.0.0.0" else args.host
     print(f"[chromepilot] ChromePilot Server v2.0.0")
-    print(f"[chromepilot] Listening on http://{lan_ip}:{args.port}")
+    print(f"[chromepilot] Listening on http://{display_host}:{args.port}")
     print(f"[chromepilot] Waiting for Chrome extension to connect...")
     web.run_app(app, host=args.host, port=args.port, print=None)
