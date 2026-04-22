@@ -55,14 +55,21 @@ Uninstall: `bash setup.sh --uninstall`
 
 ### Manual Setup
 
-#### 1. Install the Chrome Extension
+#### 1. Build the Chrome Extension
+
+```bash
+npm install
+npm run build
+```
+
+#### 2. Install the Chrome Extension
 
 1. Open `chrome://extensions/`
 2. Enable **Developer mode** (top right)
 3. Click **Load unpacked** → select the `extension/` directory
 4. You should see "ChromePilot" appear with a green status
 
-#### 2. Start the Server
+#### 3. Start the Server
 
 ```bash
 pip install aiohttp
@@ -71,12 +78,12 @@ python3 server.py
 
 ```
 [chromepilot] ChromePilot Server v2.0.0
-[chromepilot] Listening on http://192.168.1.100:8787
+[chromepilot] Listening on http://127.0.0.1:8787
 [chromepilot] Waiting for Chrome extension to connect...
 [chromepilot] ✓ Extension connected
 ```
 
-#### 3. Start Using It
+#### 4. Start Using It
 
 ```bash
 python3 cp.py status
@@ -95,6 +102,23 @@ python3 cp.py eval 'document.title'
 ```
 
 That's it. No config files, no environment variables, no browser binary downloads.
+
+## Extension Development (TS + Vite)
+
+```bash
+npm install
+npm run dev        # watch mode
+npm run typecheck  # TypeScript checks
+npm run lint       # ESLint
+npm run test       # Vitest
+npm run build      # production bundle to extension/
+```
+
+Code migration map:
+
+- Legacy extension scripts: `extension/background.js`, `extension/popup.js`
+- New build entrypoints: `src/extension/background/index.ts`, `src/extension/popup/main.ts`
+- New extension modules: `src/extension/background/modules/`, `src/extension/popup/modules/`
 
 ## Real-World Examples
 

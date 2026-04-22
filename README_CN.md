@@ -55,14 +55,21 @@ bash setup.sh
 
 ### 手动安装
 
-#### 1. 安装 Chrome 扩展
+#### 1. 构建 Chrome 扩展
+
+```bash
+npm install
+npm run build
+```
+
+#### 2. 安装 Chrome 扩展
 
 1. 打开 `chrome://extensions/`
 2. 开启右上角的**开发者模式**
 3. 点击**加载已解压的扩展程序** → 选择 `extension/` 目录
 4. 看到 "ChromePilot" 出现并显示绿色状态即可
 
-#### 2. 启动服务
+#### 3. 启动服务
 
 ```bash
 pip install aiohttp
@@ -71,12 +78,12 @@ python3 server.py
 
 ```
 [chromepilot] ChromePilot Server v2.0.0
-[chromepilot] Listening on http://192.168.1.100:8787
+[chromepilot] Listening on http://127.0.0.1:8787
 [chromepilot] Waiting for Chrome extension to connect...
 [chromepilot] ✓ Extension connected
 ```
 
-#### 3. 开始使用
+#### 4. 开始使用
 
 ```bash
 python3 cp.py status
@@ -95,6 +102,23 @@ python3 cp.py eval 'document.title'
 ```
 
 就这些。不需要配置文件，不需要环境变量，不需要下载浏览器二进制。
+
+## 扩展开发（TS + Vite）
+
+```bash
+npm install
+npm run dev        # 开发构建（监听）
+npm run typecheck  # TypeScript 类型检查
+npm run lint       # ESLint
+npm run test       # Vitest
+npm run build      # 生产构建到 extension/
+```
+
+代码结构迁移说明：
+
+- 旧版扩展脚本：`extension/background.js`、`extension/popup.js`
+- 新版构建入口：`src/extension/background/index.ts`、`src/extension/popup/main.ts`
+- 新增可扩展模块目录：`src/extension/background/modules/`、`src/extension/popup/modules/`
 
 ## 实战示例
 
