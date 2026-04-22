@@ -156,8 +156,50 @@ function timeAgo(ts) {
 }
 
 // ─────────────────────────────────────────────────────────
-// Whistle Format ↔ JSON Rules
+// Whistle Format ↔ JSON Rules (bidirectional)
 // ─────────────────────────────────────────────────────────
+
+// Helper: convert a Whistle source expression (domain, ^domain, URL) to a regex pattern
+function _sourceToPattern(src) {
+  if (src.startsWith('^')) {
+    const domain = src.slice(1);
+    const escaped = domain.replace(/\./g, '\\.').replace(/\*\*\*/g, '(.*)').replace(/\*/g, '[^/]*');
+    return '^https?://' + escaped;
+  }
+  if (src.startsWith('http://') || src.startsWith('https://')) {
+    return '^' + src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  // Plain domain (e.g. expressexport.alibaba.com or *.alibaba.com)
+  const escaped = src.replace(/\./g, '\\.').replace(/\*/g, '[^.]*');
+  return '^https?://' + escaped;
+}
+
+// Helper: extract human-readable source string from a regex pattern
+// Handles all formats: ^https?://, ^(https?)://, ^https://, bare pattern
+function _patternToSource(pat) {
+  if (!pat) return '';
+  const unescape = s => s
+    .replace(/\\\./g, '.')
+    .replace(/\[\^\/\]\*/g, '*')
+    .replace(/\[\^\.\]\*/g, '*');
+  const trimTrail = s => s
+    .replace(/\/\(\.\*\)\$?$/, '/***')   // /(.*)$ → /***
+    .replace(/\(\.\*\)\$?$/, '')         // (.*)$ at end → remove
+    .replace(/\$$/, '');
+  let m;
+  // ^https?://DOMAIN (scheme-generic, from domain-level parse)
+  m = pat.match(/^\^https\?:\/\/(.+)$/);
+  if (m) return unescape(trimTrail(m[1]));
+  // ^(https?)://DOMAIN (agent-style with scheme capture group)
+  m = pat.match(/^\^\(https\?\):\/\/(.+)$/);
+  if (m) return unescape(trimTrail(m[1]));
+  // ^https://DOMAIN or ^http://DOMAIN (scheme-specific URL redirect)
+  m = pat.match(/^\^(https?):\/\/(.+)$/);
+  if (m) return m[1] + '://' + unescape(trimTrail(m[2]));
+  // Bare pattern (no anchoring)
+  return unescape(trimTrail(pat));
+}
+
 function parseWhistleRules(text) {
   const rules = [];
   for (const raw of text.split('\n')) {
@@ -190,18 +232,42 @@ function parseWhistleRules(text) {
 
     // disable:// — bypass proxy for matching URLs (pass through without any modification)
     if (dst === 'disable://' || dst.startsWith('disable://')) {
-      let pattern;
-      if (src.startsWith('^')) {
-        const domain = src.slice(1);
-        const escaped = domain.replace(/\./g, '\\.').replace(/\*\*\*/g, '(.*)').replace(/\*/g, '[^/]*');
-        pattern = '^https?://' + escaped;
-      } else if (src.startsWith('http://') || src.startsWith('https://')) {
-        pattern = '^' + src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      rules.push({ pattern: _sourceToPattern(src), action: 'disable' });
+      continue;
+    }
+
+    // block:// — fail the request with a network error
+    if (dst === 'block://' || dst.startsWith('block://')) {
+      rules.push({ pattern: _sourceToPattern(src), action: 'block' });
+      continue;
+    }
+
+    // mock:// — return custom response: pattern mock://STATUS [BODY]
+    if (dst.startsWith('mock://')) {
+      const content = parts.slice(1).join(' ').slice('mock://'.length);
+      const spaceIdx = content.indexOf(' ');
+      let status, body = '';
+      if (spaceIdx > 0) {
+        status = parseInt(content.slice(0, spaceIdx)) || 200;
+        body = content.slice(spaceIdx + 1);
       } else {
-        const escaped = src.replace(/\./g, '\\.').replace(/\*/g, '[^.]*');
-        pattern = '^https?://' + escaped;
+        status = parseInt(content) || 200;
       }
-      rules.push({ pattern, action: 'disable' });
+      const response = { status };
+      if (body) {
+        response.body = body;
+        if (body.startsWith('{') || body.startsWith('[')) {
+          response.headers = { 'Content-Type': 'application/json' };
+        }
+      }
+      rules.push({ pattern: _sourceToPattern(src), action: 'mock', response });
+      continue;
+    }
+
+    // delay:// — add latency before forwarding: pattern delay://MS
+    if (dst.startsWith('delay://')) {
+      const ms = parseInt(dst.slice('delay://'.length)) || 0;
+      rules.push({ pattern: _sourceToPattern(src), action: 'delay', delay: ms });
       continue;
     }
 
@@ -223,20 +289,7 @@ function parseWhistleRules(text) {
         }
       }
       if (Object.keys(setHeaders).length === 0) continue;
-      // Build pattern from src
-      let pattern;
-      if (src.startsWith('^')) {
-        const domain = src.slice(1);
-        const escaped = domain.replace(/\./g, '\\.').replace(/\*\*\*/g, '(.*)').replace(/\*/g, '[^/]*');
-        pattern = '^https?://' + escaped;
-      } else if (src.startsWith('http://') || src.startsWith('https://')) {
-        pattern = '^' + src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      } else {
-        // Plain domain (e.g. onetouch.alibaba-inc.com or *.alibaba.com)
-        const escaped = src.replace(/\./g, '\\.').replace(/\*/g, '[^.]*');
-        pattern = '^https?://' + escaped;
-      }
-      rules.push({ pattern, action: 'header', setHeaders });
+      rules.push({ pattern: _sourceToPattern(src), action: 'header', setHeaders });
       continue;
     }
 
@@ -256,18 +309,7 @@ function parseWhistleRules(text) {
         }
       }
       if (Object.keys(setHeaders).length === 0) continue;
-      let pattern;
-      if (src.startsWith('^')) {
-        const domain = src.slice(1);
-        const escaped = domain.replace(/\./g, '\\.').replace(/\*\*\*/g, '(.*)').replace(/\*/g, '[^/]*');
-        pattern = '^https?://' + escaped;
-      } else if (src.startsWith('http://') || src.startsWith('https://')) {
-        pattern = '^' + src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      } else {
-        const escaped = src.replace(/\./g, '\\.').replace(/\*/g, '[^.]*');
-        pattern = '^https?://' + escaped;
-      }
-      rules.push({ pattern, action: 'resHeader', setHeaders });
+      rules.push({ pattern: _sourceToPattern(src), action: 'resHeader', setHeaders });
       continue;
     }
 
@@ -285,8 +327,8 @@ function parseWhistleRules(text) {
       continue;
     }
 
+    // ^prefix regex rewrite: ^domain/*** target/$1
     if (src.startsWith('^')) {
-      // Whistle regex rewrite: ^domain/*** target/$1
       let domain = src.slice(1);
       let pattern;
       if (domain.includes('/***')) {
@@ -298,76 +340,102 @@ function parseWhistleRules(text) {
         pattern = '^https?://' + escaped + '(.*)$';
       }
       rules.push({ pattern, action: 'redirect', target: dst });
-    } else if (src.startsWith('http://') || src.startsWith('https://')) {
-      // URL redirect: https://source https://target
+      continue;
+    }
+
+    // URL redirect: https://source https://target
+    if (src.startsWith('http://') || src.startsWith('https://')) {
       const escaped = src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       rules.push({ pattern: '^' + escaped + '(.*)$', action: 'redirect', target: dst + '$1' });
+      continue;
+    }
+
+    // Plain domain redirect: domain.com http://target (catch-all for redirect)
+    if (dst.startsWith('http://') || dst.startsWith('https://')) {
+      const escaped = src.replace(/\./g, '\\.').replace(/\*/g, '[^.]*');
+      rules.push({
+        pattern: '^https?://' + escaped + '(.*)$',
+        action: 'redirect',
+        target: dst + '$1',
+      });
+      continue;
     }
   }
   return rules;
 }
 
 function ruleToWhistle(r) {
-  if (r.action === 'disable') {
-    let pat = r.pattern || '';
-    const m = pat.match(/^\^https\?:\/\/(.+?)$/);
-    const domain = m ? m[1].replace(/\\\./g, '.').replace(/\[\^\/\]\*/g, '*').replace(/\[\^\.\]\*/g, '*') : pat;
-    return domain + ' disable://';
-  }
+  const src = _patternToSource(r.pattern || '');
+
+  // Non-redirect actions — all fully supported in Whistle format
+  if (r.action === 'disable') return src + ' disable://';
+  if (r.action === 'block') return src + ' block://';
+
   if (r.action === 'header' && r.setHeaders) {
-    // header rule → domain reqHeaders://(Name: Value)
     const headerStr = Object.entries(r.setHeaders)
       .map(([k, v]) => k + ': ' + v)
       .join('\\n');
-    let pat = r.pattern || '';
-    // Extract domain from pattern: ^https?://domain\.com → domain.com
-    const m = pat.match(/^\^https\?:\/\/(.+?)$/);
-    const domain = m ? m[1].replace(/\\\./g, '.').replace(/\[\^\/\]\*/g, '*').replace(/\[\^\.\]\*/g, '*') : pat;
-    return domain + ' reqHeaders://(' + headerStr + ')';
+    return src + ' reqHeaders://(' + headerStr + ')';
   }
+
   if (r.action === 'resHeader' && r.setHeaders) {
-    // resHeader rule → domain resHeaders://(Name: Value)
     const headerStr = Object.entries(r.setHeaders)
       .map(([k, v]) => k + ': ' + v)
       .join('\\n');
-    let pat = r.pattern || '';
-    const m = pat.match(/^\^https\?:\/\/(.+?)$/);
-    const domain = m ? m[1].replace(/\\\./g, '.').replace(/\[\^\/\]\*/g, '*').replace(/\[\^\.\]\*/g, '*') : pat;
-    return domain + ' resHeaders://(' + headerStr + ')';
+    return src + ' resHeaders://(' + headerStr + ')';
   }
+
+  if (r.action === 'mock') {
+    const status = r.response?.status || 200;
+    const body = r.response?.body || '';
+    return src + ' mock://' + status + (body ? ' ' + body : '');
+  }
+
+  if (r.action === 'delay') {
+    return src + ' delay://' + (r.delay || 0);
+  }
+
   if (r.action !== 'redirect') {
-    return '# [' + (r.action || 'mock') + '] ' + (r.pattern || '');
+    return '# [' + (r.action || 'unknown') + '] ' + (r.pattern || '');
   }
-  let pat = r.pattern || '';
+
+  // Redirect rules
   let target = r.target || '';
 
-  // IP host mapping: ^(https?)://domain\.com(.*)$ → $1://IP$2  ⇒  IP domain.com
+  // IP/hostname host mapping with setHost
   if (r.setHost) {
     const ipMatch = target.match(/^\$1:\/\/(\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?)\$2$/);
-    if (ipMatch) {
-      return ipMatch[1] + ' ' + r.setHost;
-    }
-    // Hostname host mapping: host://target_host domain
+    if (ipMatch) return ipMatch[1] + ' ' + r.setHost;
     const hostMatch = target.match(/^\$1:\/\/([^$]+)\$2$/);
-    if (hostMatch) {
-      return 'host://' + hostMatch[1] + ' ' + r.setHost;
-    }
+    if (hostMatch) return 'host://' + hostMatch[1] + ' ' + r.setHost;
   }
 
-  // ^https?://host\.path/(.*)$ → ^host.path/***
-  const m1 = pat.match(/^\^https\?:\/\/(.+)$/);
-  if (m1) {
-    let body = m1[1].replace(/\\\./g, '.').replace(/\(\.\*\)\$?$/, '***').replace(/\$$/, '');
-    return '^' + body + ' ' + target;
+  // Agent-style scheme-preserving redirect without setHost ($1://host$2 → infer as host mapping)
+  if (!r.setHost && /^\$1:\/\//.test(target) && /\$2$/.test(target)) {
+    const inner = target.replace(/^\$1:\/\//, '').replace(/\$2$/, '');
+    if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(inner)) {
+      return inner + ' ' + src;
+    }
+    return 'host://' + inner + ' ' + src;
   }
-  // ^https://host\.path(.*)$ → https://host.path target (remove $1)
-  const m2 = pat.match(/^\^(https?:\/\/.+)$/);
-  if (m2) {
-    let body = m2[1].replace(/\\\./g, '.').replace(/\(\.\*\)\$?$/, '').replace(/\$$/, '');
-    let dst = target.replace(/\$1$/, '');
-    return body + ' ' + dst;
+
+  // URL-to-URL redirect (source has scheme, e.g. https://source target)
+  if (src.startsWith('http://') || src.startsWith('https://')) {
+    return src + ' ' + target.replace(/\$1$/, '');
   }
-  return '# ' + pat + ' → ' + target;
+
+  // Domain redirect with path capture → ^domain/*** target
+  if (src.includes('/***')) {
+    return '^' + src + ' ' + target;
+  }
+
+  // If target has $1 in the middle (not just trailing), use ^domain/*** format
+  if (/\$1(?!$)/.test(target)) {
+    return '^' + src + '/*** ' + target;
+  }
+
+  // Plain domain redirect: domain target (strip trailing $N capture refs)
+  return src + ' ' + target.replace(/\$\d+$/, '');
 }
 
 function rulesToWhistle(rules) {
@@ -413,7 +481,7 @@ function _renderWhistleEditor(parent, onSave, saveLabel, stateAccessor) {
   textarea.className = 'rule-editor';
   textarea.value = acc.get() || '';
   textarea.spellcheck = false;
-  textarea.placeholder = '# Whistle 格式，每行一条规则\n^domain.com/*** http://target/$1\nhttps://source.com https://target.com\nhost://target.host domain1 domain2';
+  textarea.placeholder = '# Whistle 格式，每行一条规则\n# 重定向\nhttps://source.com https://target.com\ndomain.com http://127.0.0.1:3000\n^domain.com/*** http://target/$1\nhost://target.host domain1 domain2\n127.0.0.1:6001 domain.com\n# 请求/响应头\ndomain.com reqHeaders://(X-Env: test)\n# 拦截控制\ndomain.com block://\ndomain.com mock://200 {"data":"test"}\ndomain.com delay://2000\ndomain.com disable://';
   textarea.style.height = Math.min(340, Math.max(160, (acc.get() || '').split('\n').length * 17 + 16)) + 'px';
   textarea.oninput = () => { acc.set(textarea.value); };
   textarea.onkeydown = (e) => {
@@ -429,7 +497,7 @@ function _renderWhistleEditor(parent, onSave, saveLabel, stateAccessor) {
 
   const hint = document.createElement('div');
   hint.className = 'rule-editor-hint';
-  hint.textContent = '# 注释  ^domain/*** target/$1  https://src https://dst  host://target domain';
+  hint.textContent = '格式: domain target | ^domain/*** target/$1 | host://target domain | IP domain | reqHeaders:// | block:// | mock://STATUS | delay://MS';
 
   const actionsRow = document.createElement('div');
   actionsRow.className = 'rule-editor-actions';
@@ -690,31 +758,42 @@ registerModule({
       reset() { _editingPerTabWhistle = null; }
     };
 
-    // ── Active Tab Effective Rules ──────────────────────
+    // ── Current Tab — unified rules + editor + log ─────
     if (activeTab && activeTab.url && !activeTab.url.startsWith('chrome') && !activeTab.url.startsWith('about:')) {
       const url = activeTab.url;
-
-      // Collect matching global rules
-      const globalRules = (gp?.active && !gp?.paused) ? (gp.rules || []) : [];
-      const matchingGlobal = globalRules.filter(r => ruleMatchesUrl(r, url));
-
-      // Collect matching per-tab rules
       const tabEntry = state.tabs?.find(t => t.tabId === activeTab.tabId);
       const perTabProxy = tabEntry?.proxy;
       const isPerTab = perTabProxy && !perTabProxy._global;
       const perTabRules = isPerTab ? (perTabProxy.rules || []) : [];
-      const matchingPerTab = perTabRules.filter(r => ruleMatchesUrl(r, url));
 
-      const totalMatching = matchingGlobal.length + matchingPerTab.length;
+      // Matching global rules
+      const globalRules = (gp?.active && !gp?.paused) ? (gp.rules || []) : [];
+      const matchingGlobal = globalRules.filter(r => ruleMatchesUrl(r, url));
+
+      const totalRules = perTabRules.length + matchingGlobal.length;
 
       let displayUrl;
       try { const u = new URL(url); displayUrl = u.hostname + u.pathname; }
       catch { displayUrl = url; }
       if (displayUrl.length > 55) displayUrl = displayUrl.slice(0, 55) + '...';
 
-      const card = createCard('当前标签页', totalMatching ? totalMatching + ' 条生效' : '');
+      const card = createCard('当前标签页', totalRules ? totalRules + ' 条规则' : '');
 
-      // Tab URL row
+      // Edit button in card header
+      const editBtn = createBtn(_editingPerTabWhistle !== null ? '收起' : '编辑', 'btn', () => {
+        if (_editingPerTabWhistle !== null) {
+          _editingPerTabWhistle = null;
+        } else {
+          _editingPerTabWhistle = isPerTab
+            ? (perTabProxy.whistleText || rulesToWhistle(perTabRules))
+            : '';
+        }
+        refreshUI();
+      });
+      editBtn.style.cssText = 'padding:2px 8px;font-size:10.5px';
+      card.querySelector('.card-header').appendChild(editBtn);
+
+      // Tab URL
       const urlRow = document.createElement('div');
       urlRow.style.cssText = 'display:flex;align-items:center;gap:6px;padding:2px 0 8px;border-bottom:1px solid var(--bg);margin-bottom:6px';
       const urlText = document.createElement('span');
@@ -724,87 +803,64 @@ registerModule({
       urlRow.appendChild(urlText);
       card.appendChild(urlRow);
 
-      if (totalMatching === 0) {
-        const noMatch = document.createElement('div');
-        noMatch.style.cssText = 'color:var(--text3);font-size:12px;padding:4px 0';
-        noMatch.textContent = '无匹配的代理规则';
-        card.appendChild(noMatch);
+      if (_editingPerTabWhistle !== null) {
+        // ── Editor mode ──
+        _renderWhistleEditor(card, async (text, rules) => {
+          if (isPerTab) {
+            await chrome.runtime.sendMessage({
+              type: 'proxyUpdateRules', tabId: activeTab.tabId,
+              rules, whistleText: text
+            });
+          } else {
+            await chrome.runtime.sendMessage({
+              type: 'proxyStartTab', tabId: activeTab.tabId,
+              rules, whistleText: text
+            });
+          }
+          _editingPerTabWhistle = null;
+        }, isPerTab ? '保存' : '启动代理', perTabAcc);
       } else {
-        // Show matching rules with source tags
-        const allMatching = [
-          ...matchingGlobal.map(r => ({ rule: r, source: '全局' })),
-          ...matchingPerTab.map(r => ({ rule: r, source: '标签' })),
-        ];
-        allMatching.forEach(({ rule, source }) => {
-          const row = document.createElement('div');
-          row.className = 'rule-item';
-          row.style.cursor = 'default';
-
-          const actionSpan = document.createElement('span');
-          actionSpan.className = 'rule-action action-' + (rule.action || 'mock');
-          actionSpan.textContent = rule.action || 'mock';
-
-          const sourceSpan = document.createElement('span');
-          sourceSpan.style.cssText = 'font-size:10px;padding:1px 5px;border-radius:3px;font-weight:500;flex-shrink:0;' +
-            (source === '全局'
-              ? 'background:#dbeafe;color:#1d4ed8'
-              : 'background:#fef3c7;color:#92400e');
-          sourceSpan.textContent = source;
-
-          const textSpan = document.createElement('span');
-          textSpan.className = 'rule-pattern';
-          const wt = ruleToWhistle(rule);
-          textSpan.textContent = wt;
-          textSpan.title = wt;
-
-          row.append(actionSpan, sourceSpan, textSpan);
-          card.appendChild(row);
-        });
-      }
-
-      // Quick add per-tab rule button
-      if (!isPerTab && _editingPerTabWhistle === null) {
-        const addBtn = createBtn('+ 添加标签页规则', 'btn', () => {
-          _editingPerTabWhistle = '';
-          refreshUI();
-        });
-        addBtn.style.cssText = 'margin-top:8px;font-size:11px';
-        card.appendChild(addBtn);
-      }
-
-      container.appendChild(card);
-
-      // ── Per-Tab Proxy Rules (for active tab) ──────────
-      if (_editingPerTabWhistle !== null || isPerTab) {
-        const ptCard = createCard('标签页代理 #' + activeTab.tabId, isPerTab ? (perTabRules.length || 0) + ' 条规则' : '新建');
-
-        if (_editingPerTabWhistle !== null) {
-          _renderWhistleEditor(ptCard, async (text, rules) => {
-            if (isPerTab) {
-              await chrome.runtime.sendMessage({
-                type: 'proxyUpdateRules', tabId: activeTab.tabId,
-                rules, whistleText: text
-              });
-            } else {
-              await chrome.runtime.sendMessage({
-                type: 'proxyStartTab', tabId: activeTab.tabId,
-                rules, whistleText: text
-              });
-            }
-            _editingPerTabWhistle = null;
-          }, isPerTab ? '保存' : '启动标签页代理', perTabAcc);
+        // ── Display mode ──
+        if (totalRules === 0) {
+          const noRule = document.createElement('div');
+          noRule.style.cssText = 'color:var(--text3);font-size:12px;padding:4px 0';
+          noRule.textContent = '无代理规则 — 点击编辑添加';
+          card.appendChild(noRule);
         } else {
-          const ptWhistle = perTabProxy.whistleText || rulesToWhistle(perTabRules);
-          const editBtn = createBtn('编辑', 'btn', () => {
-            _editingPerTabWhistle = ptWhistle;
-            refreshUI();
+          // Show per-tab rules first, then matching global
+          const allRules = [
+            ...perTabRules.map(r => ({ rule: r, source: '标签' })),
+            ...matchingGlobal.map(r => ({ rule: r, source: '全局' })),
+          ];
+          allRules.forEach(({ rule, source }) => {
+            const row = document.createElement('div');
+            row.className = 'rule-item';
+            row.style.cursor = 'default';
+
+            const actionSpan = document.createElement('span');
+            actionSpan.className = 'rule-action action-' + (rule.action || 'mock');
+            actionSpan.textContent = rule.action || 'mock';
+
+            const sourceSpan = document.createElement('span');
+            sourceSpan.style.cssText = 'font-size:10px;padding:1px 5px;border-radius:3px;font-weight:500;flex-shrink:0;' +
+              (source === '全局'
+                ? 'background:#dbeafe;color:#1d4ed8'
+                : 'background:#fef3c7;color:#92400e');
+            sourceSpan.textContent = source;
+
+            const textSpan = document.createElement('span');
+            textSpan.className = 'rule-pattern';
+            const wt = ruleToWhistle(rule);
+            textSpan.textContent = wt;
+            textSpan.title = wt;
+
+            row.append(actionSpan, sourceSpan, textSpan);
+            card.appendChild(row);
           });
-          editBtn.style.cssText = 'padding:2px 8px;font-size:10.5px';
-          ptCard.querySelector('.card-header').appendChild(editBtn);
+        }
 
-          _renderRuleList(ptCard, perTabRules);
-
-          // Per-tab log
+        // Per-tab hit log
+        if (isPerTab) {
           const ptLog = perTabProxy.log || [];
           if (ptLog.length > 0) {
             const logSec = document.createElement('div');
@@ -814,10 +870,10 @@ registerModule({
             logTitle.textContent = '命中日志 \u00B7 ' + ptLog.length + ' 次';
             logSec.appendChild(logTitle);
             _renderLog(logSec, ptLog.slice(-10).reverse());
-            ptCard.appendChild(logSec);
+            card.appendChild(logSec);
           }
 
-          // Per-tab controls
+          // Controls
           const ptBtnRow = document.createElement('div');
           ptBtnRow.className = 'btn-row';
           ptBtnRow.append(
@@ -830,13 +886,14 @@ registerModule({
               fetchState();
             })
           );
-          ptCard.appendChild(ptBtnRow);
+          card.appendChild(ptBtnRow);
         }
-        container.appendChild(ptCard);
       }
+
+      container.appendChild(card);
     }
 
-    // ── Other Per-Tab Proxies ───────────────────────────
+    // ── Other Per-Tab Proxies (with copy button) ─────
     const otherPerTab = (state.tabs || []).filter(t =>
       t.proxy && !t.proxy._global && t.tabId !== activeTab?.tabId
     );
@@ -857,10 +914,24 @@ registerModule({
         titleSpan.title = bt?.url || '';
 
         const countSpan = document.createElement('span');
-        countSpan.style.cssText = 'font-size:11px;color:var(--text3)';
+        countSpan.style.cssText = 'font-size:11px;color:var(--text3);flex-shrink:0';
         countSpan.textContent = (entry.proxy.rules?.length || 0) + ' 条规则';
 
-        row.append(idSpan, titleSpan, countSpan);
+        const copyBtn = createBtn('复制到当前', 'btn', async () => {
+          if (!activeTab) return;
+          const otherRules = entry.proxy.rules || [];
+          const otherWhistle = entry.proxy.whistleText || rulesToWhistle(otherRules);
+          await chrome.runtime.sendMessage({
+            type: 'proxyStartTab',
+            tabId: activeTab.tabId,
+            rules: otherRules,
+            whistleText: otherWhistle
+          });
+          fetchState();
+        });
+        copyBtn.style.cssText = 'padding:2px 6px;font-size:10.5px;flex-shrink:0;margin-left:auto';
+
+        row.append(idSpan, titleSpan, countSpan, copyBtn);
         otherCard.appendChild(row);
       });
       container.appendChild(otherCard);
