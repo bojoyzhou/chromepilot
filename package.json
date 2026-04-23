@@ -1,6 +1,6 @@
 {
   "name": "chromepilot",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Pilots AI agents through the user's real Chrome browser via a lightweight extension. Runs JS in page context with full login session, captures network traffic, manages cookies, intercepts requests, and applies rich proxy rules (mock/block/redirect/delay/header/resHeader/disable). Manages per-tab and global proxy with auto-persistence, Whistle-compatible rule format, environment isolation headers (Alibaba dpath_env/scm_project), CORS auto-fix, host mapping (IP and hostname), and real-time hit logging. Use when the agent needs to interact with authenticated web pages, inspect/mock API calls, switch pre-release environments, block/redirect requests, add custom headers, debug CORS issues, or automate browser tasks that require the user's session.",
   "publishConfig": {
     "registry": "https://contextlab.alibaba-inc.com/skill"

@@ -15,12 +15,32 @@ let _lastStateHash = "";
 let _editingWhistle = null; // whistle text in edit mode, null = view mode
 let _editingPerTabWhistle = null; // per-tab whistle text in edit mode
 
+const ACTIVE_MODULE_STORAGE_KEY = "chromepilot.popup.activeModule";
+
+async function readSavedActiveModuleId() {
+  try {
+    const { [ACTIVE_MODULE_STORAGE_KEY]: id } =
+      await chrome.storage.local.get(ACTIVE_MODULE_STORAGE_KEY);
+    return typeof id === "string" && id ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+async function persistActiveModuleId(id) {
+  try {
+    await chrome.storage.local.set({ [ACTIVE_MODULE_STORAGE_KEY]: id });
+  } catch {
+    // ignore
+  }
+}
+
 function registerModule(mod) {
   // mod: { id, label, icon, badge?(), init?(), render(container, state), destroy?() }
   _modules.push(mod);
 }
 
-function switchModule(id) {
+function switchModule(id, opts = {}) {
   const mod = _modules.find((m) => m.id === id);
   if (!mod) return;
   if (_activeModule && _activeModule.destroy) _activeModule.destroy();
@@ -36,6 +56,8 @@ function switchModule(id) {
   main.innerHTML = "";
   if (mod.init) mod.init();
   mod.render(main, _state);
+
+  if (opts.persist) void persistActiveModuleId(id);
 }
 
 function refreshUI() {
@@ -75,7 +97,7 @@ function buildTabBar() {
       '">' +
       (badgeVal || "") +
       "</span>";
-    btn.onclick = () => switchModule(mod.id);
+    btn.onclick = () => switchModule(mod.id, { persist: true });
     bar.appendChild(btn);
   });
 }
@@ -814,7 +836,11 @@ registerModule({
 // ─────────────────────────────────────────────────────────
 // Boot
 // ─────────────────────────────────────────────────────────
-buildTabBar();
-switchModule("overview");
-fetchState();
-_refreshTimer = setInterval(fetchState, 1500);
+export async function mountLegacyPopupUi() {
+  buildTabBar();
+  const saved = await readSavedActiveModuleId();
+  const initial = saved && _modules.some((m) => m.id === saved) ? saved : "overview";
+  switchModule(initial, { persist: false });
+  fetchState();
+  _refreshTimer = setInterval(fetchState, 1500);
+}

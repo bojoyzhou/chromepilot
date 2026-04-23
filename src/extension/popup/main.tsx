@@ -1,0 +1,16 @@
+import "./style.css";
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { App } from "./App";
+
+const rootEl = document.getElementById("root");
+
+if (!rootEl) {
+  throw new Error("Missing #root element for popup React app.");
+}
+
+createRoot(rootEl).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);
