@@ -3,7 +3,7 @@ import { defineManifest } from "@crxjs/vite-plugin";
 export default defineManifest({
   manifest_version: 3,
   name: "ChromePilot",
-  version: "0.5.12",
+  version: "0.5.13",
   minimum_chrome_version: "114",
   description:
     "AI agent pilot for real Chrome: JS execution, network capture, cookies, console, and more",
