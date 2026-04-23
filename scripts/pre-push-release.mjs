@@ -5,14 +5,6 @@ const packageJsonPath = "package.json";
 const lockJsonPath = "package-lock.json";
 const extensionManifestSourcePath = "src/extension/manifest.ts";
 
-const EXTENSION_PATH_PREFIXES = [
-  "src/extension/",
-  "public/",
-  "extension/",
-  "vite.config.ts",
-  "tsconfig.json",
-];
-
 function run(command, args) {
   const result = spawnSync(command, args, {
     stdio: "inherit",
@@ -85,7 +77,42 @@ function listChangedFilesBetween(baseSha, headSha) {
 }
 
 function shouldReleaseForChangedFiles(files) {
-  return files.some((f) => EXTENSION_PATH_PREFIXES.some((p) => f === p || f.startsWith(p)));
+  if (files.length === 0) return false;
+
+  const set = new Set(files);
+
+  const hasOtherSrcExtension = files.some(
+    (f) => f.startsWith("src/extension/") && f !== extensionManifestSourcePath,
+  );
+  const hasPublic = files.some((f) => f === "public" || f.startsWith("public/"));
+  const hasRootConfig = set.has("vite.config.ts") || set.has("tsconfig.json");
+
+  if (hasOtherSrcExtension || hasPublic || hasRootConfig) return true;
+
+  // Avoid an infinite "push -> bump -> commit -> push" loop: a release commit typically touches
+  // manifest version + package metadata + built extension output together. That pattern should not
+  // immediately trigger another bump on the next push.
+  const isReleaseOnlyPath = (f) =>
+    f === extensionManifestSourcePath ||
+    f === packageJsonPath ||
+    f === lockJsonPath ||
+    f === "extension" ||
+    f.startsWith("extension/");
+
+  if (![...set].every(isReleaseOnlyPath)) {
+    return (
+      files.some((f) => f === "extension" || f.startsWith("extension/")) || set.has(extensionManifestSourcePath)
+    );
+  }
+
+  const touchesBuiltOrPackage =
+    set.has(packageJsonPath) ||
+    set.has(lockJsonPath) ||
+    files.some((f) => f === "extension" || f.startsWith("extension/"));
+
+  if (set.has(extensionManifestSourcePath) && touchesBuiltOrPackage) return false;
+
+  return set.has(extensionManifestSourcePath);
 }
 
 function bumpPatch(version) {
