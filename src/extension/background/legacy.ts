@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { setIconConnected, setIconDisconnected } from "./modules/icon-state";
-import { getFetchPatterns } from "./modules/proxy-utils";
+import { getFetchPatterns, injectCookiesIfMissing } from "./modules/proxy-utils";
 
 // ChromePilot Extension v2 — Service Worker (Manifest V3)
 // Full-featured AI pilot: JS execution, network capture, cookies, console, screenshots
@@ -24,6 +24,8 @@ const interceptRules = new Map(); // tabId → [rules]
 const pendingBodies = new Map(); // tabId → Map(requestId → {resolve, timer})
 const proxyState = new Map(); // tabId → { rules: [], log: [] }
 let globalProxy = null; // null | { rules: [], whistleText: '' }
+const commandHistory = []; // { id, action, tabId, urlMatch, ts, raw }
+const MAX_COMMAND_HISTORY = 100;
 
 // ── Global Proxy ─────────────────────────────────────────────
 // Determine Fetch interception patterns based on rules.
@@ -265,6 +267,20 @@ function debuggerStillNeeded(tabId) {
 
 // ── Command Router ───────────────────────────────────────────
 async function handleCommand(cmd) {
+  // Record command in history
+  const historyEntry = {
+    id: cmd.id || null,
+    action: cmd.action || cmd.type || null,
+    tabId: cmd.tabId || null,
+    urlMatch: cmd.urlMatch || null,
+    ts: Date.now(),
+    raw: JSON.stringify(cmd).slice(0, 2000),
+  };
+  commandHistory.push(historyEntry);
+  if (commandHistory.length > MAX_COMMAND_HISTORY) {
+    commandHistory.shift();
+  }
+
   const id = cmd.id;
   if (!id) {
     // Handle server-pushed events (no id = not a command response)
@@ -984,6 +1000,10 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
               const mergedHeaders = { ...params.request.headers, ...headerMods };
               (async () => {
                 try {
+                  // CDP Fetch.requestPaused provides headers BEFORE the browser's
+                  // cookie store injects the Cookie header. Since we use fulfillRequest
+                  // (bypassing the network layer entirely), we must manually inject cookies.
+                  await injectCookiesIfMissing(mergedHeaders, url);
                   const resp = await fetch("http://127.0.0.1:8787/proxy/fetch", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -1244,6 +1264,10 @@ async function handlePopupMessage(msg) {
       send({ _event: true, type: "proxy.global_resumed", ts: Date.now() });
       return { ok: true };
     }
+    case "clearCommandHistory": {
+      commandHistory.length = 0;
+      return { ok: true };
+    }
     default:
       return { error: `Unknown popup message: ${msg.type}` };
   }
@@ -1315,7 +1339,7 @@ async function buildPopupState() {
     globalProxyState.log.sort((a, b) => (b.ts || 0) - (a.ts || 0));
   }
 
-  return { connected, tabs: featureTabs, browserTabs, globalProxy: globalProxyState };
+  return { connected, tabs: featureTabs, browserTabs, globalProxy: globalProxyState, commandHistory: [...commandHistory] };
 }
 
 // ── Cleanup ──────────────────────────────────────────────────

@@ -1,10 +1,10 @@
 export function setIconConnected(): void {
   chrome.action.setIcon({
     path: {
-      "16": "icon16.png",
-      "32": "icon32.png",
-      "48": "icon48.png",
-      "128": "icon128.png",
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png",
     },
   });
   chrome.action.setBadgeText({ text: "" });
@@ -14,10 +14,10 @@ export function setIconConnected(): void {
 export function setIconDisconnected(): void {
   chrome.action.setIcon({
     path: {
-      "16": "icon16_gray.png",
-      "32": "icon32_gray.png",
-      "48": "icon48_gray.png",
-      "128": "icon128_gray.png",
+      "16": "icons/icon16_gray.png",
+      "32": "icons/icon32_gray.png",
+      "48": "icons/icon48_gray.png",
+      "128": "icons/icon128_gray.png",
     },
   });
   chrome.action.setBadgeText({ text: "OFF" });
