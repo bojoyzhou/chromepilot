@@ -926,6 +926,22 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
               const mergedHeaders = { ...params.request.headers, ...headerMods };
               (async () => {
                 try {
+                  // CDP Fetch.requestPaused provides headers BEFORE the browser's
+                  // cookie store injects the Cookie header. Since we use fulfillRequest
+                  // (bypassing the network layer entirely), we must manually inject cookies.
+                  // Note: this injects cookies regardless of the request's credentials mode
+                  // (omit/same-origin/include), because host mapping is a transparent proxy
+                  // — the request should behave as if hitting the original domain directly.
+                  if (!mergedHeaders['Cookie'] && !mergedHeaders['cookie']) {
+                    try {
+                      const cookies = await chrome.cookies.getAll({ url });
+                      if (cookies.length > 0) {
+                        mergedHeaders['Cookie'] = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+                      }
+                    } catch (e) {
+                      console.warn('[proxy] cookie injection failed:', e.message);
+                    }
+                  }
                   const resp = await fetch('http://127.0.0.1:8787/proxy/fetch', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
