@@ -3,24 +3,36 @@ import { defineManifest } from "@crxjs/vite-plugin";
 export default defineManifest({
   manifest_version: 3,
   name: "ChromePilot",
-  version: "2.0.0",
+  version: "0.5.1",
+  minimum_chrome_version: "114",
   description:
     "AI agent pilot for real Chrome: JS execution, network capture, cookies, console, and more",
-  permissions: ["scripting", "tabs", "alarms", "debugger", "cookies", "proxy"],
+  permissions: [
+    "scripting",
+    "tabs",
+    "alarms",
+    "debugger",
+    "cookies",
+    "proxy",
+    "sidePanel",
+    "storage",
+  ],
   host_permissions: ["<all_urls>"],
+  side_panel: {
+    default_path: "src/extension/popup/index.html",
+  },
   background: {
     service_worker: "src/extension/background/index.ts",
     type: "module",
   },
   action: {
-    default_popup: "src/extension/popup/index.html",
     default_icon: {
       "16": "icons/icon16_gray.png",
       "32": "icons/icon32_gray.png",
       "48": "icons/icon48_gray.png",
       "128": "icons/icon128_gray.png",
     },
-    default_title: "ChromePilot — Disconnected",
+    default_title: "ChromePilot — Open Side Panel",
   },
   icons: {
     "16": "icons/icon16.png",
