@@ -12,11 +12,11 @@ const TABS = [
   { id: "commands" as TabId, label: "指令", icon: "\u26A1" },
 ];
 
-const ACTIVE_MODULE_STORAGE_KEY = "chromepilot.sidePanel.activeModule";
+const ACTIVE_MODULE_STORAGE = "chromepilot.sidePanel.activeModule";
 
 async function readSavedActiveModuleId(): Promise<TabId | null> {
   try {
-    const { [ACTIVE_MODULE_STORAGE_KEY]: id } = await chrome.storage.local.get(ACTIVE_MODULE_STORAGE_KEY);
+    const { [ACTIVE_MODULE_STORAGE]: id } = await chrome.storage.local.get(ACTIVE_MODULE_STORAGE);
     return typeof id === "string" && id ? (id as TabId) : null;
   } catch {
     return null;
@@ -25,7 +25,7 @@ async function readSavedActiveModuleId(): Promise<TabId | null> {
 
 async function persistActiveModuleId(id: string): Promise<void> {
   try {
-    await chrome.storage.local.set({ [ACTIVE_MODULE_STORAGE_KEY]: id });
+    await chrome.storage.local.set({ [ACTIVE_MODULE_STORAGE]: id });
   } catch {
     // ignore
   }
