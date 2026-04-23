@@ -1,0 +1,73 @@
+/* ── Commands Panel ────────────────────────────────────── */
+
+.command-item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--bg);
+  font-size: 12px;
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &.command-item-new {
+    animation: fadeIn 0.3s ease;
+  }
+}
+
+.command-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.command-action {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  min-width: 52px;
+  text-align: center;
+  flex-shrink: 0;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.command-meta {
+  font-size: 11px;
+  color: var(--text3);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.command-expand {
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  margin-top: 4px;
+  display: inline-block;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.command-raw {
+  margin-top: 6px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-family: "SF Mono", Monaco, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text2);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}

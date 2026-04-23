@@ -1,0 +1,103 @@
+/* ── Overview Panel ────────────────────────────────────── */
+
+.conn-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.conn-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.conn-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.conn-url {
+  font-size: 11px;
+  color: var(--text3);
+}
+
+.feature-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--bg);
+  gap: 8px;
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.feature-tab-id {
+  font-family: "SF Mono", Monaco, monospace;
+  font-size: 11px;
+  color: var(--text2);
+  min-width: 44px;
+}
+
+.feature-tab-title {
+  flex: 1;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feature-pills {
+  display: flex;
+  gap: 4px;
+}
+
+.pill {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.pill-net {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.pill-con {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.pill-int {
+  background: #fce7f3;
+  color: #9d174d;
+}
+
+.pill-prx {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  text-align: center;
+  padding: 4px 0;
+}
+
+.stats-cell {
+  .stats-num {
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .stats-label {
+    font-size: 11px;
+    color: var(--text3);
+  }
+}
