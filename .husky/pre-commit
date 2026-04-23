@@ -1,5 +1,9 @@
 #!/usr/bin/env sh
 set -e
 
+# Sync package_dev.json before commit
+cp package.json package_dev.json
+git add package_dev.json
+
 npm run lint-staged
 npm run typecheck
