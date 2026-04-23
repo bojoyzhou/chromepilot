@@ -23,19 +23,19 @@ AI Agent ──HTTP──▸ ChromePilot Server ──WebSocket──▸ Chrome 
 
 所有现有的浏览器自动化工具都面临同一个根本问题：**它们用不了你的登录态。**
 
-| | ChromePilot | browser-use | Playwright / Puppeteer |
-|---|---|---|---|
-| 使用你真实的 Chrome | 是（扩展） | 需要 `--remote-debugging-port` | 启动独立浏览器 |
-| 继承登录会话 | 自动 | 需要配置 Chrome Profile | 不支持 |
-| `fetch()` 自动带 Cookie | 是（MAIN world） | 否（隔离上下文） | 否 |
-| 网络捕获 | 是（扩展内 CDP） | 否 | 是 |
-| 请求拦截 & Mock | 是 | 否 | 是 |
-| 代理规则（block/redirect/delay/header） | 是（5 种动作） | 否 | 有限 |
-| Console 捕获 | 是 | 否 | 是 |
-| Cookie 管理 | 是（chrome.cookies API） | 通过 CLI | 通过 CDP |
-| 配置复杂度 | 安装扩展 | 安装二进制 + 配置 | 安装浏览器 + 驱动 |
-| 依赖 | Python + aiohttp | Rust 二进制 | Node.js + 浏览器二进制 |
-| 单次命令延迟 | ~15ms | ~50ms | ~30ms |
+|                                         | ChromePilot              | browser-use                    | Playwright / Puppeteer |
+| --------------------------------------- | ------------------------ | ------------------------------ | ---------------------- |
+| 使用你真实的 Chrome                     | 是（扩展）               | 需要 `--remote-debugging-port` | 启动独立浏览器         |
+| 继承登录会话                            | 自动                     | 需要配置 Chrome Profile        | 不支持                 |
+| `fetch()` 自动带 Cookie                 | 是（MAIN world）         | 否（隔离上下文）               | 否                     |
+| 网络捕获                                | 是（扩展内 CDP）         | 否                             | 是                     |
+| 请求拦截 & Mock                         | 是                       | 否                             | 是                     |
+| 代理规则（block/redirect/delay/header） | 是（5 种动作）           | 否                             | 有限                   |
+| Console 捕获                            | 是                       | 否                             | 是                     |
+| Cookie 管理                             | 是（chrome.cookies API） | 通过 CLI                       | 通过 CDP               |
+| 配置复杂度                              | 安装扩展                 | 安装二进制 + 配置              | 安装浏览器 + 驱动      |
+| 依赖                                    | Python + aiohttp         | Rust 二进制                    | Node.js + 浏览器二进制 |
+| 单次命令延迟                            | ~15ms                    | ~50ms                          | ~30ms                  |
 
 关键差异在架构层面。CDP 类工具将脚本注入到**隔离的世界（isolated world）**中——你的 `fetch("/api/data")` 不会携带页面的认证 Cookie。ChromePilot 的扩展通过 `chrome.scripting.executeScript` 在 **MAIN world** 中执行代码，你的 JavaScript 就像在浏览器控制台中手动输入一样运行。每一个 `fetch` 调用、每一个 `XMLHttpRequest`、每一次 `document.cookie` 访问，行为都与真实页面完全一致。
 
@@ -224,7 +224,7 @@ cp net start --url pipeline
 while true; do
   status=$(cp eval 'document.querySelector(".pipeline-status")?.textContent' --url pipeline)
   echo "[$(date +%H:%M:%S)] 状态: $status"
-  
+
   if [ "$status" = "Success" ] || [ "$status" = "Failed" ]; then
     # 捕获最终状态
     cp screenshot "pipeline-$(date +%Y%m%d-%H%M%S).png" --url pipeline
@@ -330,11 +330,11 @@ curl -X POST http://localhost:8787/proxy/start-global \
 curl -X POST http://localhost:8787/proxy/stop-global
 ```
 
-也可以直接在 **Popup UI**（点击 ChromePilot 扩展图标）中管理全局代理，使用 Whistle 兼容的文本格式——无需编写 JSON。
+也可以直接在 **Side Panel UI**（点击 ChromePilot 扩展图标打开侧边栏面板）中管理全局代理，使用 Whistle 兼容的文本格式——无需编写 JSON。
 
 ### Whistle 兼容规则格式
 
-Popup UI 支持 [Whistle](https://github.com/nicedoc/whistle) 文本格式来编辑规则，每行一条规则：
+Side Panel UI 支持 [Whistle](https://github.com/nicedoc/whistle) 文本格式来编辑规则，每行一条规则：
 
 ```
 # CDN 重定向
@@ -359,14 +359,14 @@ https://example.com https://staging.example.com
 
 使用 `IP domain` 规则时，ChromePilot 通过服务端的自定义 DNS 解析器代理请求。这确保 TLS 握手使用正确的 SNI（Server Name Indication）——域名而非 IP——因此 HTTPS 连接能正常工作。原始 Host 头会被保留。
 
-### Popup UI
+### Side Panel UI
 
-点击 ChromePilot 扩展图标打开管理面板。Popup 提供：
+点击 ChromePilot 扩展图标打开侧边栏管理面板。Side Panel 提供：
 
 - **概览标签** — 连接状态、所有标签页的活跃功能、统计数据
 - **代理标签** — 启动/停止全局代理、以 Whistle 文本格式编辑规则、实时查看命中日志
 
-在 Popup 中编辑的规则会自动持久化并与服务端同步。
+在 Side Panel 中编辑的规则会自动持久化并与服务端同步。
 
 ## 命令参考
 

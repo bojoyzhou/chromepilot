@@ -23,19 +23,19 @@ AI Agent ──HTTP──▸ ChromePilot Server ──WebSocket──▸ Chrome 
 
 Every existing browser automation tool faces the same fundamental problem: **they can't use your login sessions.**
 
-| | ChromePilot | browser-use | Playwright / Puppeteer |
-|---|---|---|---|
-| Uses your real Chrome | Yes (extension) | Requires `--remote-debugging-port` | Launches separate browser |
-| Inherits login sessions | Automatic | Needs Chrome Profile config | Not supported |
-| `fetch()` sends cookies | Yes (MAIN world) | No (isolated context) | No |
-| Network capture | Yes (in-extension CDP) | No | Yes |
-| Request interception & mock | Yes | No | Yes |
-| Proxy rules (block/redirect/delay/header) | Yes (5 actions) | No | Limited |
-| Console capture | Yes | No | Yes |
-| Cookie management | Yes (chrome.cookies API) | Via CLI | Via CDP |
-| Setup complexity | Install extension | Install binary + config | Install browser + driver |
-| Dependencies | Python + aiohttp | Rust binary | Node.js + browser binary |
-| Single command latency | ~15ms | ~50ms | ~30ms |
+|                                           | ChromePilot              | browser-use                        | Playwright / Puppeteer    |
+| ----------------------------------------- | ------------------------ | ---------------------------------- | ------------------------- |
+| Uses your real Chrome                     | Yes (extension)          | Requires `--remote-debugging-port` | Launches separate browser |
+| Inherits login sessions                   | Automatic                | Needs Chrome Profile config        | Not supported             |
+| `fetch()` sends cookies                   | Yes (MAIN world)         | No (isolated context)              | No                        |
+| Network capture                           | Yes (in-extension CDP)   | No                                 | Yes                       |
+| Request interception & mock               | Yes                      | No                                 | Yes                       |
+| Proxy rules (block/redirect/delay/header) | Yes (5 actions)          | No                                 | Limited                   |
+| Console capture                           | Yes                      | No                                 | Yes                       |
+| Cookie management                         | Yes (chrome.cookies API) | Via CLI                            | Via CDP                   |
+| Setup complexity                          | Install extension        | Install binary + config            | Install browser + driver  |
+| Dependencies                              | Python + aiohttp         | Rust binary                        | Node.js + browser binary  |
+| Single command latency                    | ~15ms                    | ~50ms                              | ~30ms                     |
 
 The key difference is architectural. CDP-based tools inject scripts into an **isolated world** — your `fetch("/api/data")` won't carry the page's authentication cookies. ChromePilot's extension uses `chrome.scripting.executeScript` to run code in the **MAIN world**, so your JavaScript behaves exactly as if you typed it in the browser console. Every `fetch` call, every `XMLHttpRequest`, every `document.cookie` access works identically to the real page.
 
@@ -224,7 +224,7 @@ cp net start --url pipeline
 while true; do
   status=$(cp eval 'document.querySelector(".pipeline-status")?.textContent' --url pipeline)
   echo "[$(date +%H:%M:%S)] Status: $status"
-  
+
   if [ "$status" = "Success" ] || [ "$status" = "Failed" ]; then
     # Capture final state
     cp screenshot "pipeline-$(date +%Y%m%d-%H%M%S).png" --url pipeline
@@ -330,11 +330,11 @@ curl -X POST http://localhost:8787/proxy/start-global \
 curl -X POST http://localhost:8787/proxy/stop-global
 ```
 
-You can also manage global proxy directly from the **Popup UI** (click the ChromePilot extension icon) using Whistle-compatible text format — no JSON needed.
+You can also manage global proxy directly from the **Side Panel UI** (click the ChromePilot extension icon to open the side panel) using Whistle-compatible text format — no JSON needed.
 
 ### Whistle-Compatible Rule Format
 
-The Popup UI accepts rules in [Whistle](https://github.com/nicedoc/whistle) text format for easy editing. One rule per line:
+The Side Panel UI accepts rules in [Whistle](https://github.com/nicedoc/whistle) text format for easy editing. One rule per line:
 
 ```
 # Redirect CDN
@@ -360,14 +360,14 @@ Supported formats: `^domain/*** target/$1` (regex redirect), `https://src https:
 
 When using `IP domain` rules, ChromePilot proxies the request through the server with a custom DNS resolver. This ensures the TLS handshake uses the correct SNI (Server Name Indication) — the domain name, not the IP — so HTTPS connections work properly. The original Host header is preserved.
 
-### Popup UI
+### Side Panel UI
 
-Click the ChromePilot extension icon to open the management panel. The popup provides:
+Click the ChromePilot extension icon to open the management side panel. The panel provides:
 
 - **Overview tab** — connection status, active features across all tabs, statistics
 - **Proxy tab** — start/stop global proxy, edit rules in Whistle text format, view hit log in real-time
 
-Rules edited in the popup are automatically persisted and synced with the server.
+Rules edited in the side panel are automatically persisted and synced with the server.
 
 ## Command Reference
 
