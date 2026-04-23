@@ -6,7 +6,7 @@ import { App } from "./App";
 const rootEl = document.getElementById("root");
 
 if (!rootEl) {
-  throw new Error("Missing #root element for popup React app.");
+  throw new Error("Missing #root element for side panel React app.");
 }
 
 createRoot(rootEl).render(

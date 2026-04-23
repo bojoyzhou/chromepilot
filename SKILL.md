@@ -200,7 +200,7 @@ cp storage set KEY "value"           # Set value
 
 Rich request interception with 7 rule types, hit logging, hot-reload, and auto-persistence. Rules survive server restarts via `proxy-rules.json`.
 
-> **Agent must use JSON `rules` array** — `whistleText` is display-only for the popup UI. The extension executes only the `rules` array. Sending `whistleText` without `rules` does nothing.
+> **Agent must use JSON `rules` array** — `whistleText` is display-only for the side panel UI. The extension executes only the `rules` array. Sending `whistleText` without `rules` does nothing.
 
 ### Two Proxy Modes
 
@@ -262,7 +262,7 @@ For complete rule examples, Whistle text format, CORS handling, persistence, and
 
 ### Whistle Text — Unified Format
 
-All rules can be written in Whistle text format, both for popup editing and API `whistleText` field. The format is bidirectional — popup editor and API produce the same Whistle text.
+All rules can be written in Whistle text format, both for side panel editing and API `whistleText` field. The format is bidirectional — side panel editor and API produce the same Whistle text.
 
 ```
 # Redirect

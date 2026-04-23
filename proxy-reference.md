@@ -136,9 +136,9 @@ Note: Global proxy cannot be managed via CLI — use the HTTP API (`/proxy/start
 
 ## Whistle Text Format — Unified Bidirectional Format
 
-Whistle text is the **canonical human-readable format** for proxy rules. Both the popup editor and the API `whistleText` field use the same syntax. Rules written in Whistle text can be parsed to JSON rules, and JSON rules convert back to identical Whistle text (round-trip safe).
+Whistle text is the **canonical human-readable format** for proxy rules. Both the side panel editor and the API `whistleText` field use the same syntax. Rules written in Whistle text can be parsed to JSON rules, and JSON rules convert back to identical Whistle text (round-trip safe).
 
-The extension **always executes the `rules` JSON array**. Whistle text serves as the editable representation. When the user saves edits in the popup, Whistle text is parsed into rules. When rules are created via API, `rulesToWhistle()` generates the display text.
+The extension **always executes the `rules` JSON array**. Whistle text serves as the editable representation. When the user saves edits in the side panel, Whistle text is parsed into rules. When rules are created via API, `rulesToWhistle()` generates the display text.
 
 ### Complete Syntax Reference
 
@@ -198,11 +198,11 @@ All proxy rules are automatically persisted to `proxy-rules.json`. On server res
 
 ## Global Proxy Pause/Resume
 
-The popup UI includes a toggle to pause/resume global proxy without losing rules. When paused, Fetch interception is disabled but rules and hit log are preserved. Resuming re-enables interception instantly.
+The side panel UI includes a toggle to pause/resume global proxy without losing rules. When paused, Fetch interception is disabled but rules and hit log are preserved. Resuming re-enables interception instantly.
 
 ## Popup UI — Active Tab View
 
-The extension popup (click icon → Proxy tab) shows:
+The extension side panel (click icon → Proxy tab) shows:
 
 1. **当前标签页** — Unified card for the active tab. Header shows tab URL, rule count badge, and an **编辑** toggle button. Body lists **all** per-tab rules (unfiltered) plus matching global rules, each with a colored source tag (蓝色「全局」= global, 橙色「标签页」= per-tab). Action types are color-coded: redirect (blue), reqHeaders/resHeaders (teal), block (red), mock (orange), delay (yellow), disable (gray). When edit mode is on, a Whistle text editor replaces the rule list, with real-time save. Hit log (命中日志) and stop/clear controls are integrated at the bottom of the same card.
 2. **其他标签页代理** — Lists other tabs that have per-tab proxies. Each entry shows tab title, rule count, and a **复制到当前** button. Clicking this button copies that tab's proxy rules (including Whistle text) to the active tab via `proxyStartTab`, enabling quick rule reuse across tabs.

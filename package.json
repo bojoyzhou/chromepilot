@@ -21,7 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:related": "vitest related --run --passWithNoTests",
-    "precommit:version-build": "node scripts/precommit-version-build.mjs",
+    "prepush:release": "node scripts/pre-push-release.mjs",
     "lint-staged": "lint-staged",
     "prepare": "husky"
   },

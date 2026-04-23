@@ -117,8 +117,8 @@ npm run build      # production bundle to extension/
 Code migration map:
 
 - Legacy extension scripts: `extension/background.js`, `extension/popup.js`
-- New build entrypoints: `src/extension/background/index.ts`, `src/extension/popup/main.ts`
-- New extension modules: `src/extension/background/modules/`, `src/extension/popup/modules/`
+- New build entrypoints: `src/extension/background/index.ts`, `src/extension/side_panel/main.tsx`
+- New extension modules: `src/extension/background/modules/`, `src/extension/side_panel/modules/`
 
 ## Real-World Examples
 

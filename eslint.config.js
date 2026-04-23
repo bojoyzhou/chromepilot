@@ -11,7 +11,7 @@ export default tseslint.config(
       "coverage/**",
       "extension/**",
       "src/extension/background/legacy.ts",
-      "src/extension/popup/legacy.ts",
+      "src/extension/side_panel/legacy.ts",
     ],
   },
   js.configs.recommended,

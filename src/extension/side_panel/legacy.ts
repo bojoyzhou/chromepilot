@@ -3,7 +3,7 @@ import { esc, ruleMatchesUrl, timeAgo, truncate } from "./modules/utils";
 import { parseWhistleRules, rulesToWhistle, ruleToWhistle } from "./modules/whistle";
 
 // ─────────────────────────────────────────────────────────
-// ChromePilot Popup — Module System
+// ChromePilot Side Panel — Module System
 // To add a new feature tab, just call registerModule({...})
 // ─────────────────────────────────────────────────────────
 const _modules = [];
@@ -15,7 +15,7 @@ let _lastStateHash = "";
 let _editingWhistle = null; // whistle text in edit mode, null = view mode
 let _editingPerTabWhistle = null; // per-tab whistle text in edit mode
 
-const ACTIVE_MODULE_STORAGE_KEY = "chromepilot.popup.activeModule";
+const ACTIVE_MODULE_STORAGE_KEY = "chromepilot.sidePanel.activeModule";
 
 async function readSavedActiveModuleId() {
   try {
@@ -836,7 +836,7 @@ registerModule({
 // ─────────────────────────────────────────────────────────
 // Boot
 // ─────────────────────────────────────────────────────────
-export async function mountLegacyPopupUi() {
+export async function mountLegacySidePanelUi() {
   buildTabBar();
   const saved = await readSavedActiveModuleId();
   const initial = saved && _modules.some((m) => m.id === saved) ? saved : "overview";

@@ -19,7 +19,7 @@ export default defineManifest({
   ],
   host_permissions: ["<all_urls>"],
   side_panel: {
-    default_path: "src/extension/popup/index.html",
+    default_path: "src/extension/side_panel/index.html",
   },
   background: {
     service_worker: "src/extension/background/index.ts",

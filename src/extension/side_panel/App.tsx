@@ -24,7 +24,7 @@ export function App() {
 
   useEffect(() => {
     void import("./legacy").then((m) => {
-      void m.mountLegacyPopupUi();
+      void m.mountLegacySidePanelUi();
     });
   }, []);
 

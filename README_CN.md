@@ -117,8 +117,8 @@ npm run build      # 生产构建到 extension/
 代码结构迁移说明：
 
 - 旧版扩展脚本：`extension/background.js`、`extension/popup.js`
-- 新版构建入口：`src/extension/background/index.ts`、`src/extension/popup/main.ts`
-- 新增可扩展模块目录：`src/extension/background/modules/`、`src/extension/popup/modules/`
+- 新版构建入口：`src/extension/background/index.ts`、`src/extension/side_panel/main.tsx`
+- 新增可扩展模块目录：`src/extension/background/modules/`、`src/extension/side_panel/modules/`
 
 ## 实战示例
 

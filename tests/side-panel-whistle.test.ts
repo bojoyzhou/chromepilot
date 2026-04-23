@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWhistleRules, rulesToWhistle } from "../src/extension/popup/modules/whistle";
+import { parseWhistleRules, rulesToWhistle } from "../src/extension/side_panel/modules/whistle";
 
 describe("parseWhistleRules", () => {
   it("parses domain redirect", () => {
