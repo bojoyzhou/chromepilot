@@ -1,0 +1,63 @@
+{
+  "name": "chromepilot",
+  "version": "0.5.13",
+  "description": "Pilots AI agents through the user's real Chrome browser via a lightweight extension. Runs JS in page context with full login session, captures network traffic, manages cookies, intercepts requests, and applies rich proxy rules (mock/block/redirect/delay/header/resHeader/disable). Manages per-tab and global proxy with auto-persistence, Whistle-compatible rule format, environment isolation headers (Alibaba dpath_env/scm_project), CORS auto-fix, host mapping (IP and hostname), and real-time hit logging. Use when the agent needs to interact with authenticated web pages, inspect/mock API calls, switch pre-release environments, block/redirect requests, add custom headers, debug CORS issues, or automate browser tasks that require the user's session.",
+  "publishConfig": {
+    "registry": "https://contextlab.alibaba-inc.com/skill"
+  },
+  "aoneKit": {
+    "generated": true
+  },
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"tests/**/*.ts\"",
+    "lint:fix": "npm run lint -- --fix",
+    "format": "prettier --write \"{src,tests}/**/*.ts\" \"src/**/*.html\" \"src/**/*.css\" \"*.{js,json,ts}\"",
+    "format:check": "prettier --check \"{src,tests}/**/*.ts\" \"src/**/*.html\" \"src/**/*.css\" \"*.{js,json,ts}\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:related": "vitest related --run --passWithNoTests",
+    "prepush:release": "node scripts/pre-push-release.mjs",
+    "lint-staged": "lint-staged",
+    "prepare": "husky"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@gitlab.alibaba-inc.com:aone-open-skill/chromepilot.git"
+  },
+  "keywords": ["chrome-extension", "vite", "typescript"],
+  "license": "MIT",
+  "lint-staged": {
+    "src/**/*.{ts,tsx}": ["eslint --fix", "prettier --write", "npm run test:related --"],
+    "tests/**/*.ts": ["eslint --fix", "prettier --write", "npm run test:related --"],
+    "{*.{js,mjs,cjs,json,ts},src/**/*.css,src/**/*.html,README*.md}": ["prettier --write"]
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.4.0",
+    "@eslint/js": "^9.39.4",
+    "@types/chrome": "^0.1.40",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@typescript-eslint/eslint-plugin": "^8.59.0",
+    "@typescript-eslint/parser": "^8.59.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.5.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.0",
+    "vite": "^7.3.2",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  }
+}

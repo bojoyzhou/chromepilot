@@ -7,6 +7,9 @@ __pycache__/
 # User-specific proxy rules (generated at runtime)
 proxy-rules.json
 
+# package.json is auto-synced to package_dev.json in pre-commit
+/package.json
+
 # Node / Vite build outputs
 node_modules/
 dist/
