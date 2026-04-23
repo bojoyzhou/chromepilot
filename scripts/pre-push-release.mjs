@@ -4,6 +4,8 @@ import { spawnSync } from "node:child_process";
 const packageJsonPath = "package.json";
 const lockJsonPath = "package-lock.json";
 const extensionManifestSourcePath = "src/extension/manifest.ts";
+/** Git's empty tree object id (stable across all repos). */
+const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 function run(command, args) {
   const result = spawnSync(command, args, {
@@ -68,12 +70,17 @@ function isAllZeroSha(sha) {
   return /^0+$/.test(sha);
 }
 
-function listChangedFilesBetween(baseSha, headSha) {
-  if (!baseSha || isAllZeroSha(baseSha)) {
-    // New branch / no remote tip: best-effort diff against empty tree.
-    return runCapture("git", ["diff-tree", "--no-commit-id", "--name-only", "-r", headSha]).split("\n").filter(Boolean);
+/** Net tree diff between remote tip and local tip (what the push will introduce as final state). */
+function listTreeDiffFiles(remoteSha, headSha) {
+  if (!remoteSha || isAllZeroSha(remoteSha)) {
+    return runCapture("git", ["diff", "--name-only", EMPTY_TREE_SHA, headSha]).split("\n").filter(Boolean);
   }
-  return runCapture("git", ["diff", "--name-only", `${baseSha}...${headSha}`]).split("\n").filter(Boolean);
+  return runCapture("git", ["diff", "--name-only", remoteSha, headSha]).split("\n").filter(Boolean);
+}
+
+/** Files touched by a single commit (tip vs its first parent). */
+function listCommitFiles(commitSha) {
+  return runCapture("git", ["diff-tree", "--no-commit-id", "--name-only", "-r", commitSha]).split("\n").filter(Boolean);
 }
 
 function shouldReleaseForChangedFiles(files) {
@@ -113,6 +120,19 @@ function shouldReleaseForChangedFiles(files) {
   if (set.has(extensionManifestSourcePath) && touchesBuiltOrPackage) return false;
 
   return set.has(extensionManifestSourcePath);
+}
+
+function touchesExtensionPipeline(files) {
+  return files.some(
+    (f) =>
+      f.startsWith("src/extension/") ||
+      f === "public" ||
+      f.startsWith("public/") ||
+      f === "extension" ||
+      f.startsWith("extension/") ||
+      f === "vite.config.ts" ||
+      f === "tsconfig.json",
+  );
 }
 
 function bumpPatch(version) {
@@ -187,49 +207,70 @@ function main() {
     }
   }
 
-  // Aggregate file changes across all pushed ref updates (usually one line).
-  const changed = new Set();
   for (const ref of refs) {
-    for (const f of listChangedFilesBetween(ref.remoteSha, ref.localSha)) changed.add(f);
+    const treeFiles = listTreeDiffFiles(ref.remoteSha, ref.localSha);
+    if (!touchesExtensionPipeline(treeFiles)) {
+      console.log("[pre-push] no extension-related tree changes vs remote; skip");
+      continue;
+    }
+
+    assertNoUnstagedChangesOrExit("[pre-push] unstaged changes detected; commit/stash before pushing.");
+    assertIndexMatchesHeadOrExit("[pre-push] staged changes detected; commit/stash before pushing.");
+
+    const tipFiles = listCommitFiles(ref.localSha);
+    const bumpVersion = shouldReleaseForChangedFiles(tipFiles);
+
+    if (!bumpVersion) {
+      console.log("[pre-push] tip commit is not a source bump trigger; running build check only (no version bump)");
+      run("npm", ["run", "build"]);
+      stageFiles(["extension", "public"]);
+      assertNoUnstagedChangesOrExit(
+        [
+          "[pre-push] build check produced unstaged changes (or failed to stage everything).",
+          "Fix: review `git status`, commit build outputs, then push again.",
+        ].join("\n"),
+      );
+      if (!gitOk(["diff", "--cached", "--quiet"])) {
+        console.error(
+          [
+            "[pre-push] build check staged changes; commit them before pushing.",
+            "Tip: if this is unexpected, run `npm run build` locally and commit `extension/` updates.",
+          ].join("\n"),
+        );
+        process.exit(1);
+      }
+      continue;
+    }
+
+    const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+    const nextVersion = bumpPatch(pkg.version);
+
+    updatePackageVersion(nextVersion);
+    updateLockfileVersion(nextVersion);
+    updateExtensionManifestVersion(nextVersion);
+
+    // Bump + manifest updates should be staged before build so failures don't leave half-applied artifacts.
+    stageFiles([packageJsonPath, lockJsonPath, extensionManifestSourcePath]);
+
+    run("npm", ["run", "build"]);
+
+    stageFiles(["extension", "public"]);
+
+    assertNoUnstagedChangesOrExit(
+      [
+        "[pre-push] release produced unstaged changes (or failed to stage everything).",
+        "Fix: review `git status`, stage the missing files, then commit/amend as needed and push again.",
+      ].join("\n"),
+    );
+
+    console.log(
+      [
+        `[pre-push] staged release bump ${pkg.version} -> ${nextVersion} + build artifacts.`,
+        "Next: include these changes in a commit (often `git commit --amend --no-edit`) and push again.",
+      ].join("\n"),
+    );
+    process.exit(1);
   }
-
-  const files = [...changed];
-  if (!shouldReleaseForChangedFiles(files)) {
-    console.log("[pre-push] no extension-related changes; skip version bump + build");
-    return;
-  }
-
-  assertNoUnstagedChangesOrExit("[pre-push] unstaged changes detected; commit/stash before pushing.");
-  assertIndexMatchesHeadOrExit("[pre-push] staged changes detected; commit/stash before pushing.");
-
-  const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-  const nextVersion = bumpPatch(pkg.version);
-
-  updatePackageVersion(nextVersion);
-  updateLockfileVersion(nextVersion);
-  updateExtensionManifestVersion(nextVersion);
-
-  // Bump + manifest updates should be staged before build so failures don't leave half-applied artifacts.
-  stageFiles([packageJsonPath, lockJsonPath, extensionManifestSourcePath]);
-
-  run("npm", ["run", "build"]);
-
-  stageFiles(["extension", "public"]);
-
-  assertNoUnstagedChangesOrExit(
-    [
-      "[pre-push] release produced unstaged changes (or failed to stage everything).",
-      "Fix: review `git status`, stage the missing files, then commit/amend as needed and push again.",
-    ].join("\n"),
-  );
-
-  console.log(
-    [
-      `[pre-push] staged release bump ${pkg.version} -> ${nextVersion} + build artifacts.`,
-      "Next: include these changes in a commit (often `git commit --amend --no-edit`) and push again.",
-    ].join("\n"),
-  );
-  process.exit(1);
 }
 
 main();
