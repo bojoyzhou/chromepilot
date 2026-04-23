@@ -62,7 +62,7 @@ function main() {
   updateLockfileVersion(nextVersion);
   updateExtensionManifestVersion(nextVersion);
 
-  run("npm", ["run", "build"]);
+  
 
   stageFiles([
     packageJsonPath,
@@ -70,6 +70,8 @@ function main() {
     extensionManifestSourcePath,
     "extension",
   ]);
+
+  run("npm", ["run", "build"]);
 
   // Keep public icon source changes if they happen during migration.
   stageFiles(["public"]);
