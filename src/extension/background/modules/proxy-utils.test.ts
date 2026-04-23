@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getFetchPatterns } from "../src/extension/background/modules/proxy-utils";
+import { getFetchPatterns } from "./proxy-utils";
 
 describe("getFetchPatterns", () => {
   it("returns request-only pattern for normal rules", () => {
