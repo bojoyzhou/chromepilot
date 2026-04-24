@@ -14,10 +14,10 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint \"src/**/*.{ts,tsx}\"",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"tests/**/*.ts\"",
     "lint:fix": "npm run lint -- --fix",
-    "format": "prettier --write \"{src,tests}/**/*.ts\" \"src/**/*.html\" \"src/**/*.{css,scss}\" \"*.{js,json,ts}\"",
-    "format:check": "prettier --check \"{src,tests}/**/*.ts\" \"src/**/*.html\" \"src/**/*.{css,scss}\" \"*.{js,json,ts}\"",
+    "format": "prettier --write \"{src,tests}/**/*.ts\" \"src/**/*.html\" \"src/**/*.css\" \"*.{js,json,ts}\"",
+    "format:check": "prettier --check \"{src,tests}/**/*.ts\" \"src/**/*.html\" \"src/**/*.css\" \"*.{js,json,ts}\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:related": "vitest related --run --passWithNoTests",
@@ -33,7 +33,8 @@
   "license": "MIT",
   "lint-staged": {
     "src/**/*.{ts,tsx}": ["eslint --fix", "prettier --write", "npm run test:related --"],
-    "{*.{js,mjs,cjs,json,ts},src/**/*.{css,scss},src/**/*.html,README*.md}": ["prettier --write"]
+    "tests/**/*.ts": ["eslint --fix", "prettier --write", "npm run test:related --"],
+    "{*.{js,mjs,cjs,json,ts},src/**/*.css,src/**/*.html,README*.md}": ["prettier --write"]
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.4.0",
@@ -48,10 +49,8 @@
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.5.0",
     "husky": "^9.1.7",
-    "jsdom": "^27.0.1",
     "lint-staged": "^16.4.0",
     "prettier": "^3.8.3",
-    "sass": "^1.99.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.0",
     "vite": "^7.3.2",
