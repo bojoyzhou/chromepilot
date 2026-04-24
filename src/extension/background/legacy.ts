@@ -23,6 +23,7 @@ const debuggerTabs = new Set(); // tabs with debugger attached
 const interceptRules = new Map(); // tabId → [rules]
 const pendingBodies = new Map(); // tabId → Map(requestId → {resolve, timer})
 const proxyState = new Map(); // tabId → { rules: [], log: [] }
+const MAX_PROXY_LOG = 200;
 let globalProxy = null; // null | { rules: [], whistleText: '' }
 const commandHistory = []; // { id, action, tabId, urlMatch, ts, raw }
 const MAX_COMMAND_HISTORY = 100;
@@ -891,6 +892,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
             ts: Date.now(),
           };
           pState.log.push(logEntry);
+          if (pState.log.length > MAX_PROXY_LOG)
+            pState.log.splice(0, pState.log.length - MAX_PROXY_LOG);
           pushEvent("proxy.hit", tabId, logEntry);
         } else {
           // No resHeader match at Response stage, pass through
@@ -1086,6 +1089,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
         }
 
         pState.log.push(logEntry);
+        if (pState.log.length > MAX_PROXY_LOG)
+          pState.log.splice(0, pState.log.length - MAX_PROXY_LOG);
         pushEvent("proxy.hit", tabId, logEntry);
         return; // handled by proxy, skip legacy intercept
       }
@@ -1337,9 +1342,16 @@ async function buildPopupState() {
       }
     }
     globalProxyState.log.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    if (globalProxyState.log.length > MAX_PROXY_LOG) globalProxyState.log.length = MAX_PROXY_LOG;
   }
 
-  return { connected, tabs: featureTabs, browserTabs, globalProxy: globalProxyState, commandHistory: [...commandHistory] };
+  return {
+    connected,
+    tabs: featureTabs,
+    browserTabs,
+    globalProxy: globalProxyState,
+    commandHistory: [...commandHistory],
+  };
 }
 
 // ── Cleanup ──────────────────────────────────────────────────
